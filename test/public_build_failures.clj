@@ -18,7 +18,7 @@
   "(defcell Good {:binding :GOOD})\n")
 
 (def prelude
-  "(ns fixture.invalid (:require-macros [fast-twitch.celld.macros :refer [defcell defrpc deffetch defalarm defcell-init defqueue-handler defworkflow defcontract defwebsocket-handlers with-transaction-sync]]))\n")
+  "(ns fixture.invalid (:require-macros [fast-twitch.celld.macros :refer [defcell defrpc deffetch defalarm defcell-init defqueue-handler defworkflow defcontract defwebsocket-handlers]]))\n")
 
 (defn websocket-case
   [kind event variadic?]

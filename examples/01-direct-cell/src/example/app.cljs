@@ -3,8 +3,8 @@
   (:require [cljs.core :refer [await]]
             [fast-twitch.celld.context :as context]
             [fast-twitch.celld.storage.kv :as cell-kv]
-            [fast-twitch.celld.validation :as validation]
             [fast-twitch.celld.native :as native]
+            [malli.core :as m]
             [fast-twitch.celld.http :as http]
             [fast-twitch.celld.rpc :as rpc]
             [fast-twitch.celld.bindings :as bindings]
@@ -70,21 +70,21 @@
               target #js {:echo (fn [value]
                                   value)}
               options {:secureTransport :off}
-              allowed #{:secureTransport :allowHalfOpen}
               direct-arguments (to-array arguments)
+              validation-check (m/validator :int)
               action (case operation
                        :baseline (fn []
                                    7)
-                       :validation #(validation/check! :int 7 :adapter-cost)
+                       :validation #(do (validation-check 7) 7)
                        :direct-call
                          #(Reflect.apply (.-echo target) target direct-arguments)
                        :adapter-call #(native/invoke target :echo arguments)
-                       :options #(do (native/options options allowed :tcp-connect) 7))
+                       :options #(do (native/option-fields options) 7))
               result (loop [n iterations
                             total 0]
                        (if (zero? n) total (recur (dec n) (+ total (action)))))
-              first-projection (native/options options allowed :tcp-connect)
-              next-projection (native/options options allowed :tcp-connect)]
+              first-projection (native/option-fields options)
+              next-projection (native/option-fields options)]
           {:operation operation
            :iterations iterations
            :result result

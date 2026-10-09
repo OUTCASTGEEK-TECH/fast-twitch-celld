@@ -1,0 +1,15 @@
+{:lint-as {malli.experimental/defn schema.core/defn
+           fast-twitch.celld.macros/defcontract clojure.core/def
+           fast-twitch.celld.macros/defcell clojure.core/def
+           fast-twitch.celld.macros/defworker clojure.core/def
+           fast-twitch.celld.macros/defwebsocket-handlers clojure.core/def
+           fast-twitch.celld.macros/defcell-init clojure.core/defn
+           fast-twitch.celld.macros/deffetch clojure.core/defn
+           fast-twitch.celld.macros/defrpc clojure.core/defn
+           fast-twitch.celld.macros/defalarm clojure.core/defn
+           fast-twitch.celld.macros/defqueue-handler clojure.core/defn
+           fast-twitch.celld.macros/defscheduled-handler clojure.core/defn}
+ :hooks {:analyze-call {fast-twitch.celld.macros/defworkflow
+                          hooks.celld.declarations/workflow
+                        fast-twitch.celld.storage/with-transaction-sync
+                          hooks.celld.declarations/transaction}}}

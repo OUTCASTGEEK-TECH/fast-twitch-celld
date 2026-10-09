@@ -1,15 +1,1 @@
-{:lint-as {malli.experimental/defn schema.core/defn}
- :hooks {:analyze-call
-           {fast-twitch.celld.macros/defcontract hooks.celld.declarations/value
-            fast-twitch.celld.macros/defcell hooks.celld.declarations/value
-            fast-twitch.celld.macros/defworker hooks.celld.declarations/value
-            fast-twitch.celld.macros/defwebsocket-handlers hooks.celld.declarations/value
-            fast-twitch.celld.macros/defcell-init hooks.celld.declarations/handler
-            fast-twitch.celld.macros/deffetch hooks.celld.declarations/handler
-            fast-twitch.celld.macros/defrpc hooks.celld.declarations/handler
-            fast-twitch.celld.macros/defalarm hooks.celld.declarations/handler
-            fast-twitch.celld.macros/defqueue-handler hooks.celld.declarations/handler
-            fast-twitch.celld.macros/defscheduled-handler hooks.celld.declarations/handler
-            fast-twitch.celld.macros/defworkflow hooks.celld.declarations/workflow
-            fast-twitch.celld.macros/with-transaction-sync
-              hooks.celld.declarations/transaction}}}
+{:config-paths ["../resources/clj-kondo.exports/fast-twitch/celld"]}

@@ -2,7 +2,9 @@
   "Async D1 statement/session operations. Native statements and bookmarks retain
   receiver identity; Cell SQL cursor/transaction semantics do not apply here."
   (:refer-clojure :exclude [run!])
-  (:require [cljs.core :refer [await]]
+  (:require [fast-twitch.celld.contracts :as contracts]
+            [cljs.core :refer [await]]
+            [malli.experimental :as mx]
             [fast-twitch.celld.native :as n]
             [fast-twitch.celld.sql :as sql]
             [fast-twitch.celld.validation :as v]
@@ -58,34 +60,31 @@
   [statement]
   (result-map (await (n/invoke statement "run" []))))
 
-(defn ^:async first!
+(mx/defn ^{:dynamic true :async true} first!
   "No column gives a keyword row or nil. Column form returns its native value;
   a missing column rejects natively, while an absent row remains nil."
   ([statement]
    (sql/row-map (await (n/invoke statement "first" []))))
-  ([statement column]
+  ([statement column :- :keyword]
    (await (n/invoke statement
                     "first"
-                    [(names/identifier (v/check! :keyword column :d1-column))]))))
+                    [(names/identifier column)]))))
 
-(defn ^:async raw!
+(mx/defn ^{:async true :dynamic true} raw!
   "Returns vectors in native column order; :columnNames prepends keyword selectors."
   ([statement]
    (mapv vec (array-seq (await (n/invoke statement "raw" [])))))
-  ([statement options]
+  ([statement options :- (:d1-raw contracts/schemas)]
    (let [rows (mapv vec
-                (array-seq (await (n/invoke
-                                    statement
-                                    "raw"
-                                    [(n/options options #{:columnNames} :d1-raw)]))))]
+                (array-seq (await
+                             (n/invoke statement "raw" [(n/option-fields options)]))))]
      (if (and (:columnNames options) (seq rows))
        (update rows 0 #(mapv names/selector %))
        rows))))
 
-(defn ^:async batch!
+(mx/defn ^{:dynamic true :async true} batch!
   "Runs native ordered batch/atomicity and preserves each result's metadata."
-  [database statements]
-  (v/check! [:vector :any] statements :d1-batch)
+  [database statements :- [:vector :any]]
   (mapv result-map
     (array-seq (await (n/invoke database "batch" [(to-array statements)])))))
 
@@ -98,16 +97,18 @@
       (v/fail! :d1-exec :parameters "Use prepare/run! for parameterized HoneySQL."))
     (n/data-map (await (n/invoke database "exec" [text])))))
 
-(defn with-session
+(mx/defn ^:dynamic with-session
   "Returns a native session synchronously. Bookmark/constraint omission is preserved."
   ([database]
    (n/invoke database "withSession" []))
-  ([database constraint-or-bookmark]
+  ([database constraint-or-bookmark :- [:or :keyword :string]]
    (n/invoke database
              "withSession"
-             [(v/check! :string (names/text constraint-or-bookmark) :d1-session)])))
+             [(names/text constraint-or-bookmark)])))
 
 (defn bookmark
   "Returns the native opaque bookmark or nil before a successful session query."
   [session]
   (n/invoke session "getBookmark" []))
+
+(v/instrument! first! raw! batch! with-session)

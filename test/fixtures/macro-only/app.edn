@@ -1,4 +1,4 @@
-{:name "macro-only"
+{:name :macro-only
  :entry fixture.app
  :paths ["test/fixtures/macro-only/src"]
  :output "test/fixtures/macro-only/.celld-build"

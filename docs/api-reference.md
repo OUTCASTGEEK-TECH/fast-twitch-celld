@@ -90,7 +90,7 @@ Serializes CLJS JSON data losslessly using version 2 and a UTF-8 byte budget.
 (read-json text)
 ```
 
-Reads version-2 CLJS JSON text; legacy JSON projects received object keys to keywords.
+Reads version-2 CLJS JSON text or interoperable plain JSON.
 
 ### `encode`
 
@@ -106,7 +106,7 @@ Encodes an explicitly selected native/JSON/RPC boundary value; storage callers r
 (decode policy value)
 ```
 
-Decodes a checked native value or versioned JSON envelope, retaining legacy v1 reads.
+Decodes checked native data or strict version-2 JSON text.
 
 ### `persistence-policy!`
 
@@ -462,14 +462,6 @@ Reads a live native property synchronously without cloning; getter failures prop
 
 Projects keyword field names losslessly; rejects native-key collisions and preserves values/handles.
 
-### `options`
-
-```clojure
-(options value allowed operation)
-```
-
-Checks the closed operation options before projecting selectors/fields; resources remain native.
-
 ### `data-map`
 
 ```clojure
@@ -492,8 +484,7 @@ Decodes application arguments, checks before effects, awaits once, then checks a
 ### `call!`
 
 ```clojure
-(call! stub method args)
-(call! stub method args options)
+(call! stub method args & [options])
 ```
 
 Calls one stable native method. Contract schemas describe application values.
@@ -546,8 +537,7 @@ Reads native engine state synchronously, without caching a local flag.
 ### `start!`
 
 ```clojure
-(start! container)
-(start! container options)
+(start! container & [options :as supplied])
 ```
 
 Starts synchronously; native engine startup errors surface through monitor.
@@ -564,8 +554,7 @@ Returns the native exit Promise. It is owned by the current invocation.
 ### `destroy!`
 
 ```clojure
-(destroy! container)
-(destroy! container error)
+(destroy! container & [error :as supplied])
 ```
 
 Stops the native container; optional error is preserved as the monitor rejection.
@@ -607,8 +596,7 @@ Returns the shared TCP representation of a native event-scoped port socket.
 ### `exec!`
 
 ```clojure
-(exec! container command)
-(exec! container command options)
+(exec! container command & [options :as supplied])
 ```
 
 Returns a Promise of a native process with explicit stdin/stdout/stderr modes.
@@ -640,8 +628,7 @@ Returns native whole process output once; cannot follow separate stream consumpt
 ### `kill!`
 
 ```clojure
-(kill! process)
-(kill! process signal)
+(kill! process & [signal :as supplied])
 ```
 
 Synchronously requests a process signal; omitted native signal defaults to 15.
@@ -819,18 +806,16 @@ Returns the original native service KV namespace.
 ### `get!`
 
 ```clojure
-(get! binding key)
-(get! binding key options)
+(get! binding key & [options])
 ```
 
-Returns native text/JSON/bytes/stream or nil. Bulk maps retain the caller’s key identities and preserve null holes.
+Returns native text/JSON/bytes/stream or nil. Bulk maps retain keyword keys and null holes.
   JSON mode projects received fields to keywords; lossless CLJS decoding uses get-json!.
 
 ### `get-with-metadata!`
 
 ```clojure
-(get-with-metadata! binding key)
-(get-with-metadata! binding key options)
+(get-with-metadata! binding key & [options])
 ```
 
 Returns value/metadata/cacheStatus data, retaining native streamed values.
@@ -838,13 +823,11 @@ Returns value/metadata/cacheStatus data, retaining native streamed values.
 ### `put!`
 
 ```clojure
-(put! binding key value)
-(put! binding key value options)
+(put! binding key value & [options :as supplied])
 ```
 
-Writes string/native bytes/stream, preserving stream ownership. Expiration units are seconds.
-  CLJS metadata uses the lossless versioned JSON codec; native metadata stays native.
-  Resources and oversized encoded metadata reject before invoking put.
+Writes string/native bytes/stream, preserving ownership. Expiration units are seconds.
+  CLJS metadata uses versioned JSON; native metadata stays native. All values are checked before put.
 
 ### `put-json!`
 
@@ -873,8 +856,7 @@ Returns the native delete Promise for a keyword key.
 ### `list!`
 
 ```clojure
-(list! binding)
-(list! binding options)
+(list! binding & [options])
 ```
 
 Returns keyword metadata records and an opaque native continuation cursor.
@@ -956,26 +938,16 @@ Returns the native queue/message/batch handle.
 ### `send!`
 
 ```clojure
-(send! queue value)
-(send! queue value options)
+(send! queue value & [options])
 ```
 
-Returns native committed-send Promise. Body serialization is explicit through
-  :contentType; native v8 data uses the checked structured value domain.
-
-### `send-encoded!`
-
-```clojure
-(send-encoded! queue value policy options)
-```
-
-Wraps CLJS JSON in a version-2 envelope before native send; legacy version-1 reads remain supported.
+Returns native committed-send Promise. :codec checks/encodes the body once;
+  :contentType selects native serialization. Native structured data is the default.
 
 ### `send-batch!`
 
 ```clojure
-(send-batch! queue messages)
-(send-batch! queue messages options)
+(send-batch! queue messages & [options])
 ```
 
 Encodes/validates every entry before invoking native sendBatch once. Returns its Promise.
@@ -1016,11 +988,10 @@ Settles one native message synchronously; first settlement wins in Celld.
 ### `retry!`
 
 ```clojure
-(retry! message)
-(retry! message options)
+(retry! message & [options :as supplied])
 ```
 
-Requests native redelivery, synchronously. Optional delay is in seconds.
+Synchronously requests native retry with optional delay in seconds.
 
 ### `ack-all!`
 
@@ -1033,11 +1004,10 @@ Synchronously acknowledges the native batch's unsettled messages.
 ### `retry-all!`
 
 ```clojure
-(retry-all! batch)
-(retry-all! batch options)
+(retry-all! batch & [options :as supplied])
 ```
 
-Synchronously retries unsettled messages, preserving native first-call semantics.
+Synchronously requests native retry with optional delay in seconds.
 
 ## fast-twitch.celld.services.r2
 
@@ -1068,8 +1038,7 @@ Returns metadata or nil without consuming any body.
 ### `get!`
 
 ```clojure
-(get! bucket key)
-(get! bucket key options)
+(get! bucket key & [options])
 ```
 
 Returns {:state :missing/:condition-unmet/:found :object ...}. Only :found has a body.
@@ -1077,8 +1046,7 @@ Returns {:state :missing/:condition-unmet/:found :object ...}. Only :found has a
 ### `put!`
 
 ```clojure
-(put! bucket key value)
-(put! bucket key value options)
+(put! bucket key value & [options])
 ```
 
 Returns the stored native metadata, or nil when a native write precondition refuses it.
@@ -1094,8 +1062,7 @@ Deletes one key or a checked vector of keys; returns the native Promise.
 ### `list!`
 
 ```clojure
-(list! bucket)
-(list! bucket options)
+(list! bucket & [options])
 ```
 
 Returns streamed-object metadata pages with :truncated? and an opaque cursor when supplied.
@@ -1103,8 +1070,7 @@ Returns streamed-object metadata pages with :truncated? and an opaque cursor whe
 ### `create-multipart!`
 
 ```clojure
-(create-multipart! bucket key)
-(create-multipart! bucket key options)
+(create-multipart! bucket key & [options :as supplied])
 ```
 
 Returns a Promise of a native multipart handle. Checksums/conditions are unsupported here.
@@ -1243,22 +1209,19 @@ Returns the live Workflow binding, instance or step capability.
 ### `create!`
 
 ```clojure
-(create! binding)
-(create! binding options)
-(create! binding options policy)
+(create! binding & [options :as supplied])
 ```
 
-Returns a Promise of a native instance, with native generated ID when omitted.
-  Native structured params are checked; selected rich data must be explicitly encoded.
+Returns a native instance Promise, with native generated ID when omitted.
+  :codec selects params encoding; native structured data is the default.
 
 ### `create-batch!`
 
 ```clojure
 (create-batch! binding options)
-(create-batch! binding options policy)
 ```
 
-Creates 1–100 native instances with native duplicate filtering; optional codec encodes each present params value.
+Creates 1–100 native instances after checking and encoding every entry's params with its :codec.
 
 ### `get!`
 
@@ -1287,20 +1250,18 @@ Returns the native instance ID synchronously.
 ### `status!`
 
 ```clojure
-(status! instance)
-(status! instance policy)
+(status! instance & [policy :as supplied])
 ```
 
-Returns native status/output/error; optional codec decodes a present successful output.
+Returns native status/output/error; an optional codec decodes present output.
 
 ### `send-event!`
 
 ```clojure
 (send-event! instance options)
-(send-event! instance options policy)
 ```
 
-Sends a native event type/payload; buffered-before-wait behavior remains native.
+Sends a keyword event type and optional payload encoded with :codec; buffering remains native.
 
 ### `pause!`
 
@@ -1321,8 +1282,7 @@ Returns the native resume Promise.
 ### `restart!`
 
 ```clojure
-(restart! instance)
-(restart! instance options)
+(restart! instance & [options :as supplied])
 ```
 
 Restarts through native instance control; native supported options remain explicit.
@@ -1346,14 +1306,11 @@ Deletes natively and preserves native success/error handling.
 ### `do!`
 
 ```clojure
-(do! step name callback)
-(do! step name options callback)
-(do! step name options callback policy)
+(do! step name callback & [options])
 ```
 
-Runs one native durable step. Callback may return a Promise; defaults/retries/replay
-  are native. Callback receives the original native step/attempt/config context.
-  Results are checked/encoded inside the step, before native persistence.
+Runs one durable step; defaults/retries/replay are native. The callback receives
+  native step/attempt/config context; its awaited result is encoded before persistence.
 
 ### `sleep!`
 
@@ -1375,19 +1332,17 @@ Durably sleeps until native milliseconds or Date; returns its Promise.
 
 ```clojure
 (wait-for-event! step name options)
-(wait-for-event! step name options policy)
 ```
 
-Returns native waited event, preserving type/timeout options and native buffering.
+Returns a keyword event map with payload decoded using :codec; buffering remains native.
 
 ### `non-retryable-error`
 
 ```clojure
-(non-retryable-error message)
-(non-retryable-error message name)
+(non-retryable-error message & [name])
 ```
 
-Constructs the native permanent Workflow error with optional native name; preserves constructor arity.
+Constructs the native permanent Workflow error synchronously, with optional name.
 
 ## fast-twitch.celld.sql
 
@@ -1505,8 +1460,7 @@ Returns the original native storage or transaction view.
 ### `get!`
 
 ```clojure
-(get! storage key)
-(get! storage key options)
+(get! storage key & [options])
 ```
 
 Reads one key as {:found? ... :value ...}, or vector of keys as a keyword-keyed
@@ -1515,18 +1469,15 @@ Reads one key as {:found? ... :value ...}, or vector of keys as a keyword-keyed
 ### `put!`
 
 ```clojure
-(put! storage entries)
-(put! storage key value)
-(put! storage key value options)
+(put! storage key value & [options])
 ```
 
-Writes one value or a keyword-keyed map. Batch values are all encoded before
-  the native mutation. Native optional storage flags have no effect in this target.
+Writes one keyword key/value after encoding. Native optional storage flags have no effect in this target.
 
 ### `put-many!`
 
 ```clojure
-(put-many! storage entries options)
+(put-many! storage entries & [options])
 ```
 
 Encodes an entire keyword-keyed batch before invoking native put; returns its Promise.
@@ -1542,8 +1493,7 @@ Deletes a keyword key (boolean) or vector of keys (count), preserving native res
 ### `list-entries!`
 
 ```clojure
-(list-entries! storage)
-(list-entries! storage options)
+(list-entries! storage & [options])
 ```
 
 Realizes native traversal order as a vector of [keyword decoded-value] pairs.
@@ -1552,12 +1502,11 @@ Realizes native traversal order as a vector of [keyword decoded-value] pairs.
 ### `list!`
 
 ```clojure
-(list! storage)
-(list! storage options)
+(list! storage & options)
 ```
 
-Returns a keyword-keyed lookup map, with explicit value decoding. Map traversal
-  order is unspecified; use list-entries! for ordered reverse/range results.
+Returns a keyword-keyed lookup map. Map traversal order is unspecified;
+  use list-entries! for ordered reverse/range results.
 
 ### `delete-all!`
 
@@ -1612,20 +1561,18 @@ Returns storage.kv, the synchronous native view of Cell storage.
 ### `get-value`
 
 ```clojure
-(get-value kv key)
-(get-value kv key policy)
+(get-value kv key & [policy])
 ```
 
-Synchronously reads a keyword key; tagged :found? distinguishes undefined from null. An optional explicit codec decodes the value.
+Synchronously reads a keyword key; tagged :found? distinguishes undefined from null.
 
 ### `put!`
 
 ```clojure
-(put! kv key value)
-(put! kv key value policy)
+(put! kv key value & [policy])
 ```
 
-Synchronously writes one keyword key and explicitly encoded native/JSON value. Returns the native result.
+Synchronously writes one keyword key and encoded native/JSON value; returns the native result.
 
 ### `delete!`
 
@@ -1638,8 +1585,7 @@ Synchronously deletes one key and returns the native boolean.
 ### `list-native`
 
 ```clojure
-(list-native kv)
-(list-native kv options)
+(list-native kv & [options :as supplied])
 ```
 
 Returns the live iterator. A subsequent list on this object invalidates it.
@@ -1647,11 +1593,10 @@ Returns the live iterator. A subsequent list on this object invalidates it.
 ### `list-values`
 
 ```clojure
-(list-values kv)
-(list-values kv options policy)
+(list-values kv & [options policy :as supplied])
 ```
 
-Realizes keyword/value pairs immediately while the native iterator is valid; decoding is explicit.
+Realizes keyword/value pairs while the native iterator is valid; optional codec decodes values.
 
 ## fast-twitch.celld.validation
 
@@ -1735,8 +1680,7 @@ Creates the native pair synchronously, returning :client and :server native sock
 ### `accept!`
 
 ```clojure
-(accept! ctx socket)
-(accept! ctx socket tags)
+(accept! ctx socket & [tags :as supplied])
 ```
 
 Accepts through ctx.acceptWebSocket exactly once; tags are native string vectors.
@@ -1745,8 +1689,7 @@ Accepts through ctx.acceptWebSocket exactly once; tags are native string vectors
 ### `sockets`
 
 ```clojure
-(sockets ctx)
-(sockets ctx tag)
+(sockets ctx & [tag :as supplied])
 ```
 
 Returns shared native connection handles; optional tag omission is preserved.
@@ -1762,21 +1705,18 @@ Returns the native accepted socket tags synchronously.
 ### `serialize-attachment!`
 
 ```clojure
-(serialize-attachment! socket value)
-(serialize-attachment! socket value policy)
+(serialize-attachment! socket value & [policy])
 ```
 
-Stores an explicit codec envelope; native resources/functions are rejected.
-  :json handles the documented CLJS JSON domain and version 2, with legacy version-1 reads.
+Stores an explicit native/JSON codec envelope; resources/functions are rejected.
 
 ### `deserialize-attachment`
 
 ```clojure
-(deserialize-attachment socket)
-(deserialize-attachment socket policy)
+(deserialize-attachment socket & [policy])
 ```
 
-Returns the explicitly decoded native attachment. Missing native data remains nil.
+Returns the decoded native attachment. Missing native data remains nil.
 
 ### `set-auto-response!`
 
@@ -1849,6 +1789,6 @@ Returns the actual WorkflowEntrypoint-derived CLJS constructor with receiver-ass
 
 ## Declaration macros
 
-`defcontract` records a portable literal schema. `defcell-init`, `deffetch`, `defrpc`, `defalarm`, `defqueue-handler`, `defscheduled-handler` and `defwebsocket-handlers` define focused declarations selected by an owner’s `:include`. `defcell`, `defworker` and `defworkflow` emit direct exports. `with-transaction-sync` checks thenables inside the native callback.
+`defcontract` records a portable literal schema. `defcell-init`, `deffetch`, `defrpc`, `defalarm`, `defqueue-handler`, `defscheduled-handler` and `defwebsocket-handlers` define focused declarations selected by an owner’s `:include`. `defcell`, `defworker` and `defworkflow` emit direct exports. Require `with-transaction-sync` from `fast-twitch.celld.storage` with `:refer-macros`; it checks thenables inside the native callback.
 
 Initialization takes `[ctx]`; fetch `[ctx request]`; RPC `[ctx & arguments]`; alarm `[ctx alarm-info]`; queue/scheduled `[ctx native-event]`; Workflow `[ctx event step]`. Literal keys, scope, names, codec/schema references, arity and export/binding/event identity are mandatory checked before publication.

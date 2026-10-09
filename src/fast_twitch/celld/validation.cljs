@@ -1,5 +1,6 @@
 (ns fast-twitch.celld.validation
   "Release-enabled data and native capability guards. Checks precede effects."
+  (:require-macros [fast-twitch.celld.validation])
   (:require [malli.core :as m]
             [fast-twitch.celld.contracts :as contracts]
             [fast-twitch.celld.names :as names])
@@ -54,15 +55,25 @@
                              error))
              (throw error))))))
 
-(defonce ^:private validators
-  (atom {}))
-
-(defn- validator-for
-  [schema]
-  (or (get @validators schema)
-      (let [validator (m/validator schema)]
-        (swap! validators #(assoc (if (< (count %) 128) % {}) schema validator))
-        validator)))
+(defn ^:no-doc instrument
+  "Installs a registered mx/defn contract in release output with bounded diagnostics."
+  [operation f & [details]]
+  (m/-instrument
+    (assoc (get-in (m/function-schemas :cljs)
+                   [(symbol (namespace operation)) (symbol (name operation))])
+      :report (fn [_ {:keys [input output args value]}]
+                (fail! operation
+                       :data
+                       "Supply a value matching the function contract."
+                       (merge (when details (details args))
+                              (when-let [schema (or input output)]
+                                (dissoc (contracts/issue schema (if input args value))
+                                  :type))))))
+    ;; Invoke captured variadic dispatch instead of the instrumented public var.
+    (if (.-cljs$lang$applyTo f)
+      (fn [& args]
+        (.call (.-cljs$lang$applyTo f) f args))
+      f)))
 
 (defn check!
   "Checks release-time data before effects and reports a bounded schema location/identity."
@@ -70,7 +81,7 @@
    (check! schema value operation {}))
   ([schema value operation details]
    (when-not ((try
-                (validator-for schema)
+                (contracts/validator schema)
                 (catch :default _
                   (fail! operation :schema "Supply a valid portable contract." details)))
                value)

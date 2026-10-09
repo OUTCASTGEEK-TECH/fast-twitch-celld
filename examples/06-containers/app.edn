@@ -1,4 +1,4 @@
-{:name "native-containers"
+{:name :native-containers
  :entry example.container-app
  :paths ["examples/06-containers/src"]
  :output "examples/06-containers/.celld-build"

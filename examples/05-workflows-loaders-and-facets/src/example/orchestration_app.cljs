@@ -24,43 +24,46 @@
    :args [:map-of :keyword :any]
    :returns [:map-of :keyword :any]}
   [_ctx event step]
-  (let [sensitive? (try (workflows/do! step
-                                       "unavailable"
-                                       {:sensitive :output}
-                                       (fn []
-                                         nil))
+  (let [sensitive? (try (await (workflows/do! step
+                                              :unavailable
+                                              (fn []
+                                                nil)
+                                              {:sensitive :output}))
                         false
                         (catch :default error
                           (= :unavailable (:boundary (ex-data error)))))
         payload (req! event :payload)
-        initial (await (workflows/do!
-                         step
-                         "initial"
-                         {:retries {:limit 0 :delay "1 second"} :timeout "10 seconds"}
-                         (fn [step-context]
-                           {:value (get payload :value 7)
-                            :native-step-context
-                              (and (= 1 (.-attempt step-context))
-                                   (= "initial" (.-name (.-step step-context)))
-                                   (= "10 seconds" (.-timeout (.-config step-context))))})
-                         :json))]
+        initial (await
+                  (workflows/do!
+                    step
+                    :initial
+                    (fn [step-context]
+                      {:value (get payload :value 7)
+                       :native-step-context
+                         (and (= 1 (.-attempt step-context))
+                              (= "initial" (.-name (.-step step-context)))
+                              (= "10 seconds"
+                                 (.-timeout (.-config step-context))))})
+                    {:retries {:limit 0 :delay "1 second"}
+                     :timeout "10 seconds"
+                     :codec :json}))]
     (when (get payload :fail)
       (await (workflows/do! step
-                            "failure"
+                            :failure
                             (fn []
                               (throw (workflows/non-retryable-error
                                        "fixture permanent failure"))))))
     (doseq [n (range 2)]
       (await (workflows/do! step
-                            "repeated"
+                            :repeated
                             (fn []
                               n))))
-    (await (workflows/sleep! step "short-sleep" 20))
-    (await (workflows/sleep-until! step "absolute-sleep" (Date.now)))
-    (let [received (await (workflows/wait-for-event! step
-                                                     "event"
-                                                     {:type :continue :timeout "1 minute"}
-                                                     :json))]
+    (await (workflows/sleep! step :short-sleep 20))
+    (await (workflows/sleep-until! step :absolute-sleep (Date.now)))
+    (let [received (await (workflows/wait-for-event!
+                            step
+                            :event
+                            {:type :continue :timeout "1 minute" :codec :json}))]
       {:value (get initial :value)
        :event (req! received :payload)
        :native-step-context (get initial :native-step-context)
@@ -98,7 +101,7 @@
                false
                (catch :default error
                  (= :fast-twitch.http/body-unavailable (:code (ex-data error)))))
-        code (loaders/code {:mainModule "loaded.mjs"
+        code (loaders/code {:mainModule :loaded.mjs
                             :modules {:loaded.mjs source}
                             :compatibilityDate "2026-10-07"
                             :compatibilityFlags [:js_rpc]
@@ -194,7 +197,7 @@
                                            "socket-fixture"
                                            (fn []
                                              (loaders/code
-                                               {:mainModule "loaded.mjs"
+                                               {:mainModule :loaded.mjs
                                                 :modules {:loaded.mjs source}
                                                 :compatibilityDate "2026-10-07"
                                                 :compatibilityFlags [:js_rpc]})))
@@ -226,30 +229,30 @@
   [ctx]
   (let [flow (bindings/get-binding ctx :FLOW)
         id (str "controls-" (.randomUUID crypto))
-        instance (await (workflows/create!
-                          flow
-                          {:id id :params {:value 11} :locationHint :apac-se}
-                          :json))
+        instance (await
+                   (workflows/create!
+                     flow
+                     {:id id :params {:value 11} :locationHint :apac-se :codec :json}))
         looked-up (await (workflows/get! flow id))
         waiting (await (settled! instance #{:waiting}))
         _ (await (workflows/pause! instance))
         paused (await (settled! instance #{:paused}))
         _ (await (workflows/resume! instance))
-        _ (await (workflows/send-event! instance
-                                        {:type :continue :payload {:ready true}}
-                                        :json))
+        _ (await (workflows/send-event!
+                   instance
+                   {:type :continue :payload {:ready true} :codec :json}))
         complete (await (settled! instance #{:complete}))
         _ (await (workflows/restart! instance
-                                     {:from {:name "initial" :count 1 :type :do}}))
-        _ (await (workflows/send-event! instance
-                                        {:type :continue :payload {:ready "restart"}}
-                                        :json))
+                                     {:from {:name :initial :count 1 :type :do}}))
+        _ (await (workflows/send-event!
+                   instance
+                   {:type :continue :payload {:ready "restart"} :codec :json}))
         restarted (await (settled! instance #{:complete}))
         _ (await (workflows/delete! instance))
         deleted? (try (await (workflows/get! flow id)) false (catch :default _ true))
-        batch (await (workflows/create-batch! flow
-                                              [{:id (str id "-batch") :params {:value 1}}]
-                                              :json))
+        batch (await (workflows/create-batch!
+                       flow
+                       [{:id (str id "-batch") :params {:value 1} :codec :json}]))
         batch-instance (aget batch 0)
         _ (await (workflows/terminate! batch-instance))
         terminated (await (settled! batch-instance #{:terminated}))
@@ -257,9 +260,9 @@
         batch-deleted? (try (await (workflows/get! flow (str id "-batch")))
                             false
                             (catch :default _ true))
-        failed (await (workflows/create! flow
-                                         {:id (str id "-error") :params {:fail true}}
-                                         :json))
+        failed (await (workflows/create!
+                        flow
+                        {:id (str id "-error") :params {:fail true} :codec :json}))
         failure (await (settled! failed #{:errored}))
         _ (await (workflows/delete! failed))
         invalid? (try (workflows/create! flow {:locationHint "unsupported"})
@@ -314,11 +317,11 @@
                                         {:id (str "fixture-" (.randomUUID crypto))
                                          :params {:value 9}
                                          :locationHint :apac-ne
-                                         :retention {:successRetention "1 day"}}
-                                        :json))]
-                  (await (workflows/send-event! instance
-                                                {:type :continue :payload {:ready true}}
-                                                :json))
+                                         :retention {:successRetention "1 day"}
+                                         :codec :json}))]
+                  (await (workflows/send-event!
+                           instance
+                           {:type :continue :payload {:ready true} :codec :json}))
                   {:status 200 :body (json/encode {:id (workflows/id instance)})})
       "/status"
         (let [instance (await (workflows/get!

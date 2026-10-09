@@ -2,7 +2,8 @@
   "Celld socket acceptance and durable dispatch metadata over Fast-Twitch handles.
   Resident listeners and native hibernation callbacks use one delivery path each.
   Facet sockets remain resident according to Celld even with native acceptance."
-  (:require [fast-twitch.celld.native :as n]
+  (:require [malli.experimental :as mx]
+            [fast-twitch.celld.native :as n]
             [fast-twitch.celld.context :as context]
             [fast-twitch.celld.codec :as codec]
             [fast-twitch.celld.validation :as v]
@@ -24,58 +25,43 @@
   []
   (let [pair (WebSocketPair.)] {:client (aget pair "0") :server (aget pair "1")}))
 
-(defn accept!
+(mx/defn ^:dynamic accept!
   "Accepts through ctx.acceptWebSocket exactly once; tags are native string vectors.
   Hibernating mode must have generated stable lifecycle handlers."
-  ([ctx socket]
-   (n/invoke (context/native ctx) "acceptWebSocket" [(native socket)])
-   (connection/native (native socket)))
-  ([ctx socket tags]
-   (v/check! [:vector :string] tags :websocket-tags)
-   (n/invoke (context/native ctx) "acceptWebSocket" [(native socket) (to-array tags)])
-   (connection/native (native socket))))
+  [ctx socket & [tags :as supplied] :- [:? [:vector :string]]]
+  (let [socket (native socket)]
+    (n/invoke (context/native ctx)
+              "acceptWebSocket"
+              (cond-> [socket] supplied (conj (to-array tags))))
+    (connection/native socket)))
 
-(defn sockets
+(mx/defn ^:dynamic sockets
   "Returns shared native connection handles; optional tag omission is preserved."
-  ([ctx]
-   (mapv connection/native
-     (array-seq (n/invoke (context/native ctx) "getWebSockets" []))))
-  ([ctx tag]
-   (mapv connection/native
-     (array-seq (n/invoke (context/native ctx)
-                          "getWebSockets"
-                          [(v/check! :string tag :websocket-tag)])))))
+  [ctx & [tag :as supplied] :- [:? :string]]
+  (mapv connection/native
+    (array-seq (n/invoke (context/native ctx) "getWebSockets" (if supplied [tag] [])))))
 
 (defn tags
   "Returns the native accepted socket tags synchronously."
   [ctx socket]
   (vec (array-seq (n/invoke (context/native ctx) "getTags" [(native socket)]))))
 
-(defn serialize-attachment!
-  "Stores an explicit codec envelope; native resources/functions are rejected.
-  :json handles the documented CLJS JSON domain and version 2, with legacy version-1 reads."
-  ([socket value]
-   (serialize-attachment! socket value :native))
-  ([socket value policy]
-   (codec/persistence-policy! policy)
-   (n/invoke (native socket) "serializeAttachment" [(codec/encode policy value)])))
+(mx/defn ^:dynamic serialize-attachment!
+  "Stores an explicit native/JSON codec envelope; resources/functions are rejected."
+  [socket value & [policy] :- [:? [:maybe [:enum :native :json]]]]
+  (n/invoke (native socket) "serializeAttachment" [(codec/encode policy value)]))
 
-(defn deserialize-attachment
-  "Returns the explicitly decoded native attachment. Missing native data remains nil."
-  ([socket]
-   (deserialize-attachment socket :native))
-  ([socket policy]
-   (codec/persistence-policy! policy)
-   (let [value (n/invoke (native socket) "deserializeAttachment" [])]
-     (when (some? value) (codec/decode policy value)))))
+(mx/defn ^:dynamic deserialize-attachment
+  "Returns the decoded native attachment. Missing native data remains nil."
+  [socket & [policy] :- [:? [:maybe [:enum :native :json]]]]
+  (let [value (n/invoke (native socket) "deserializeAttachment" [])]
+    (when (some? value) (codec/decode policy value))))
 
-(defn set-auto-response!
+(mx/defn ^:dynamic set-auto-response!
   "Installs a native pair or clears it by omitted argument; UTF-8 sides are bounded natively."
   ([ctx]
    (n/invoke (context/native ctx) "setWebSocketAutoResponse" []))
-  ([ctx request response]
-   (v/check! :string request :websocket-auto-response)
-   (v/check! :string response :websocket-auto-response)
+  ([ctx request :- :string response :- :string]
    (doseq [text [request response]]
      (when (> (.-byteLength (.encode (TextEncoder.) text)) 2048)
        (v/fail! :websocket-auto-response
@@ -191,3 +177,9 @@
                       (try (n/invoke socket "close" [4011 "Acceptance failed"])
                            (catch :default _ nil)))
                     (throw error)))))})
+
+(v/instrument! accept!
+               sockets
+               serialize-attachment!
+               deserialize-attachment
+               set-auto-response!)

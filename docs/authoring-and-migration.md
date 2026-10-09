@@ -46,9 +46,8 @@ the application implementation namespace and do not substitute HTTP for RPC.
 Native structured data and the explicit `:json` envelope are separate domains.
 Default/native policy retains native objects, buffers and supported structured
 types. A CLJS persistent collection requires explicit `:json` selection, whose
-version-2 envelope preserves keyword keys and values, including namespaces.
-The byte budget includes the encoded UTF-8 tags/header. Legacy version-1 reads
-project received object fields to keywords. Authored payload maps require keyword keys. Unsupported envelope versions fail before returning a value.
+version-2 JSON text preserves keyword keys and values, including namespaces.
+The byte budget includes the encoded UTF-8 tags/header. Only version-2 envelopes are supported. Authored payload maps require keyword keys. Unsupported envelope versions fail before returning a value.
 
 Keep the selected codec consistent across writes and reads. To change a stored
 representation, read the old version explicitly and write the new representation

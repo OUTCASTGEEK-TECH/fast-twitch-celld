@@ -126,8 +126,96 @@
          :build
            "Selected declarations/config are mandatory validated; member option parity remains separately qualified."})))
 
+(defn member-evidence
+  [mappings evidence container]
+  (let
+    [fixtures (t/indexed
+                (map #(assoc %
+                        :assertions
+                          (try (json/parse-string (:result %) true)
+                               (catch Exception _ nil)))
+                  (:fixtures evidence))
+                :fixture)
+     artifacts (t/indexed (:artifacts evidence) :fingerprint)
+     native
+       (for [kind [:checks :invocation-checks]
+             :let [invocation? (= kind :invocation-checks)]]
+         (into
+           {}
+           (for [[id [fixture assertion]] (kind mappings)
+                 :let [record (fixtures fixture)
+                       artifact (artifacts (:artifact-fingerprint record))]
+                 :when (and (:passed record)
+                            artifact
+                            (or invocation?
+                                (if assertion
+                                  (true? (get (:assertions record) (keyword assertion)))
+                                  (and (contains? (:scalar-checks mappings) id)
+                                       (= (:result record)
+                                          (second (get-in mappings
+                                                          [:scalar-checks id])))))))]
+             [id
+              (cond->
+                {:qualification (if (and invocation? (not= id :communication/SSE))
+                                  "native-invocation-passed"
+                                  "native-case-passed")
+                 :final-bundle-evidence
+                   (merge
+                     {:record "docs/qualification-evidence.json"
+                      :fixture fixture
+                      :assertion assertion
+                      :artifact-fingerprint (:artifact-fingerprint record)
+                      :coverage
+                        (if invocation?
+                          "The named assertion or invocation only; no claim of all settlement or cron semantics."
+                          "this case only; remaining options/overloads are not certified")}
+                     (select-keys artifact
+                                  (cond-> [:manifest :bundle-sha256 :manifest-sha256]
+                                    (not invocation?) (conj :input-fingerprint))))}
+                (not invocation?)
+                  (assoc :contract-test
+                    {:source "test/native_qualification.clj"
+                     :fixture fixture
+                     :assertion assertion}))])))
+     container-bundle
+       {:record "docs/qualification-evidence.json"
+        :fixture "container"
+        :artifact-fingerprint (:artifact-fingerprint container)
+        :manifest (str "examples/06-containers/.celld-build/generations/"
+                       (:artifact-fingerprint container)
+                       "/manifest.edn")
+        :scope (:scope
+                 container
+                 "Historical experimental VM case only; native kill limitation recorded.")
+        :manifest-sha256 (get-in container [:artifact-integrity :manifest-sha256])
+        :bundle-sha256 (get-in container [:artifact-integrity :bundle-sha256])}
+     container-cases
+       (into {}
+             (for [[member assertion] container-checks
+                   :when (and (:artifact-fingerprint container)
+                              (true? (get-in container [:checks assertion])))]
+               [(keyword "containers" (name member))
+                {:qualification (if (:adapter-qualified container)
+                                  "native-case-passed"
+                                  "historical-native-case-passed")
+                 :final-bundle-evidence (assoc container-bundle
+                                          :assertion (name assertion))
+                 :contract-test {:source "test/native_container_qualification.clj"
+                                 :assertion (name assertion)}}]))
+     limited
+       (when (and (:adapter-qualified container) (seq (:native-limits container)))
+         {:containers/kill
+            {:qualification "native-limited"
+             :final-bundle-evidence
+               (merge
+                 (select-keys container-bundle [:record :fixture :artifact-fingerprint])
+                 (select-keys container [:native-limits :diagnostics])
+                 {:scope
+                    "Wrapper invokes native kill synchronously; bounded process termination remains limited by the pinned native/engine path."})}})]
+    (apply merge-with merge (concat native [container-cases limited]))))
+
 (defn reconcile-entry
-  [entry api by-function mappings source-signatures fixtures artifacts]
+  [entry api by-function mappings source-signatures evidence]
   (let
     [id (keyword (:id entry))
      family (keyword (namespace id))
@@ -160,102 +248,8 @@
                {:scope
                   "Shared mandatory schema implementation; this entry has no per-entry case claim."
                 :source "dev/fast_twitch/celld/config.clj"})
-         (wrapper-entry entry api by-function mappings source-signatures))
-     [fixture assertion] (get-in mappings [:checks id])
-     record (fixtures fixture)
-     artifact (artifacts (:artifact-fingerprint record))
-     valid (and (:passed record)
-                (:artifact-fingerprint record)
-                artifact
-                (if assertion
-                  (try (true? (get (json/parse-string (:result record) true)
-                                   (keyword assertion)))
-                       (catch Exception _ false))
-                  (and (contains? (:scalar-checks mappings) id)
-                       (= (:result record)
-                          (second (get-in mappings [:scalar-checks id]))))))
-     entry (if (and (contains? (:checks mappings) id) valid)
-             (assoc entry
-               :qualification "native-case-passed"
-               :final-bundle-evidence
-                 (merge
-                   {:record "docs/qualification-evidence.json"
-                    :fixture fixture
-                    :assertion assertion
-                    :artifact-fingerprint (:artifact-fingerprint record)
-                    :coverage
-                      "this case only; remaining options/overloads are not certified"}
-                   (select-keys artifact
-                                [:manifest :bundle-sha256 :manifest-sha256
-                                 :input-fingerprint]))
-               :contract-test {:source "test/native_qualification.clj"
-                               :fixture fixture
-                               :assertion assertion})
-             entry)
-     [fixture assertion] (get-in mappings [:invocation-checks id])
-     record (fixtures fixture)
-     artifact (artifacts (:artifact-fingerprint record))]
-    (if (and (:passed record) artifact)
-      (assoc entry
-        :qualification
-          (if (= id :communication/SSE) "native-case-passed" "native-invocation-passed")
-        :final-bundle-evidence
-          (merge
-            {:record "docs/qualification-evidence.json"
-             :fixture fixture
-             :assertion assertion
-             :artifact-fingerprint (:artifact-fingerprint record)
-             :coverage
-               "The named assertion or invocation only; no claim of all settlement or cron semantics."}
-            (select-keys artifact [:manifest :bundle-sha256 :manifest-sha256])))
-      entry)))
-
-(defn container-entry
-  [entry container]
-  (let
-    [id (keyword (:id entry))
-     assertion (container-checks (keyword (name id)))
-     qualified (and (= "containers" (namespace id))
-                    assertion
-                    (true? (get-in container [:checks assertion]))
-                    (:artifact-fingerprint container))
-     entry
-       (if qualified
-         (assoc entry
-           :qualification (if (:adapter-qualified container)
-                            "native-case-passed"
-                            "historical-native-case-passed")
-           :final-bundle-evidence
-             {:record "docs/qualification-evidence.json"
-              :fixture "container"
-              :assertion (name assertion)
-              :artifact-fingerprint (:artifact-fingerprint container)
-              :manifest (str "examples/06-containers/.celld-build/generations/"
-                             (:artifact-fingerprint container)
-                             "/manifest.edn")
-              :scope
-                (:scope
-                  container
-                  "Historical experimental VM case only; native kill limitation recorded.")
-              :manifest-sha256 (get-in container [:artifact-integrity :manifest-sha256])
-              :bundle-sha256 (get-in container [:artifact-integrity :bundle-sha256])}
-           :contract-test {:source "test/native_container_qualification.clj"
-                           :assertion (name assertion)})
-         entry)]
-    (if (and (= id :containers/kill)
-             (:adapter-qualified container)
-             (seq (:native-limits container)))
-      (assoc entry
-        :qualification "native-limited"
-        :final-bundle-evidence
-          {:record "docs/qualification-evidence.json"
-           :fixture "container"
-           :artifact-fingerprint (:artifact-fingerprint container)
-           :native-limits (:native-limits container)
-           :diagnostics (:diagnostics container)
-           :scope
-             "Wrapper invokes native kill synchronously; bounded process termination remains limited by the pinned native/engine path."})
-      entry)))
+         (wrapper-entry entry api by-function mappings source-signatures))]
+    (merge entry (evidence id))))
 
 (defn additional-entries
   [entries modules]
@@ -312,7 +306,7 @@
                           functions)))
         (partition-by :namespace api))
       ["## Declaration macros" ""
-       "`defcontract` records a portable literal schema. `defcell-init`, `deffetch`, `defrpc`, `defalarm`, `defqueue-handler`, `defscheduled-handler` and `defwebsocket-handlers` define focused declarations selected by an owner’s `:include`. `defcell`, `defworker` and `defworkflow` emit direct exports. `with-transaction-sync` checks thenables inside the native callback."
+       "`defcontract` records a portable literal schema. `defcell-init`, `deffetch`, `defrpc`, `defalarm`, `defqueue-handler`, `defscheduled-handler` and `defwebsocket-handlers` define focused declarations selected by an owner’s `:include`. `defcell`, `defworker` and `defworkflow` emit direct exports. Require `with-transaction-sync` from `fast-twitch.celld.storage` with `:refer-macros`; it checks thenables inside the native callback."
        ""
        "Initialization takes `[ctx]`; fetch `[ctx request]`; RPC `[ctx & arguments]`; alarm `[ctx alarm-info]`; queue/scheduled `[ctx native-event]`; Workflow `[ctx event step]`. Literal keys, scope, names, codec/schema references, arity and export/binding/event identity are mandatory checked before publication."
        ""])))
@@ -331,19 +325,13 @@
                                      (slurp harness)
                                      ""))
      by-function (t/indexed api #(str (:namespace %) "/" (:name %)))
-     fixtures (t/indexed (:fixtures evidence) :fixture)
-     artifacts (t/indexed (:artifacts evidence) :fingerprint)
      container (when (t/text (t/path "target/native-container/evidence.json"))
                  (t/read-json (t/path "target/native-container/evidence.json")))
-     entries (mapv #(container-entry (reconcile-entry %
-                                                      api
-                                                      by-function
-                                                      mappings
-                                                      source-signatures
-                                                      fixtures
-                                                      artifacts)
-                                     container)
-               (:entries catalog))
+     member-evidence (member-evidence mappings evidence container)
+     entries
+       (mapv
+         #(reconcile-entry % api by-function mappings source-signatures member-evidence)
+         (:entries catalog))
      modules (map second
                (re-seq #"\"((?:node|cloudflare):[^\" ]+)\""
                        (first (str/split (slurp (t/path

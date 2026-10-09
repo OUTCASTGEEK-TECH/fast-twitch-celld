@@ -9,7 +9,7 @@
   "Selects owned sources and EDN, pruning generated and imported dependency trees."
   []
   (let [excluded #{"target" "build" "node_modules" "vendor" "imports"}
-        roots ["src" "test" "dev" "resources" "examples" "docs" ".clj-kondo/hooks"]]
+        roots ["src" "test" "dev" "resources" "examples" "docs"]]
     (sort
       (concat ["deps.edn" "bb.edn" ".zprintrc" ".clj-kondo/config.edn"]
               (for [root roots
@@ -36,33 +36,33 @@
   "Runs reproducible format/check or lint against the same maintained file set."
   [action & args]
   (try
+    (when (#{"lint" "lint-fixtures"} action)
+      (execute! "clj-kondo"
+                  "--repro"
+                "--cache-dir"
+                  "target/clj-kondo-cache"
+                "--lint"
+                  (str/join java.io.File/pathSeparator
+                            (remove #(str/starts-with?
+                                       (.getCanonicalPath (io/file %))
+                                       (str (.getCanonicalPath (io/file "."))
+                                            java.io.File/separator))
+                              (str/split (System/getProperty "java.class.path")
+                                         (re-pattern
+                                           java.io.File/pathSeparator))))
+                "--dependencies"
+                  "--parallel"))
     (case action
       "format" (apply execute!
                  "bin/celld-clojure"
                  "-M:zprint"
                  (if (= ["--check"] args) "-sc" "-sw")
                  (maintained-files))
-      "lint" (do
-               (execute! "clj-kondo"
-                           "--repro"
-                         "--cache-dir"
-                           "target/clj-kondo-cache"
-                         "--lint"
-                           (str/join java.io.File/pathSeparator
-                                     (remove #(str/starts-with?
-                                                (.getCanonicalPath (io/file %))
-                                                (str (.getCanonicalPath (io/file "."))
-                                                     java.io.File/separator))
-                                       (str/split (System/getProperty "java.class.path")
-                                                  (re-pattern
-                                                    java.io.File/pathSeparator))))
-                         "--dependencies"
-                           "--parallel")
-               (apply execute!
-                 "clj-kondo" "--repro"
-                 "--cache-dir"
-                   "target/clj-kondo-cache"
-                 "--lint" (concat (maintained-files) args)))
+      "lint" (apply execute!
+               "clj-kondo" "--repro"
+               "--cache-dir"
+                 "target/clj-kondo-cache"
+               "--lint" (concat (maintained-files) args))
       "lint-fixtures" (fixtures/verify!)
       (throw (ex-info "Use format [--check], lint or lint-fixtures" {:action action})))
     (catch clojure.lang.ExceptionInfo error

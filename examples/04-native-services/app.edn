@@ -1,4 +1,4 @@
-{:name "native-services"
+{:name :native-services
  :entry example.services-app
  :paths ["examples/04-native-services/src"]
  :output "examples/04-native-services/.celld-build"

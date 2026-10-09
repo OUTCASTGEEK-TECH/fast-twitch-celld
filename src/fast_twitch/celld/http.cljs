@@ -1,6 +1,7 @@
 (ns fast-twitch.celld.http
   "Celld entrypoint and binding Fetch adapters using the shared HTTP conversions."
-  (:require [cljs.core :refer [await]]
+  (:require [malli.experimental :as mx]
+            [cljs.core :refer [await]]
             [fast-twitch.client.http :as client]
             [fast-twitch.util.http.request :as request]
             [fast-twitch.util.http.response :as response]
@@ -9,16 +10,14 @@
             [fast-twitch.celld.validation :as v]
             [fast-twitch.celld.websocket :as websocket]))
 
-(defn client-for
+(mx/defn ^:dynamic client-for
   "Returns a Fast-Twitch client for a native fetch capability; keeps its receiver.
   AbortSignal and current request edits pass through the existing converter."
   ([binding]
    (client-for binding {}))
-  ([binding options]
+  ([binding options :- [:map [:request-check {:optional true} [:fn fn?]]]]
    (v/method! binding "fetch")
    (let [user-check (:request-check options)]
-     (when (contains? options :request-check)
-       (v/check! [:fn fn?] user-check :fetch-options))
      (client/make-client
        (assoc options
          :request-check (fn [request-map effective]
@@ -53,3 +52,5 @@
   "Edits the current Ring URI while retaining native request metadata and body ownership."
   [request path]
   (assoc request :uri path))
+
+(v/instrument! client-for)

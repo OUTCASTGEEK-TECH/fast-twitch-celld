@@ -42,80 +42,51 @@
                    (slurp file)))
 
 (defn read-native
-  "Reads JSON/JSONC using a string-aware comment/trailing-comma scanner."
+  "Reads JSON/JSONC, preserving complete string tokens while removing comments and trailing commas."
   [file]
-  (let [source (slurp file)
-        out (StringBuilder.)
-        length (count source)
-        clean (loop [i 0
-                     state :normal
-                     escape? false]
-                (if (>= i length)
-                  (str out)
-                  (let [c (.charAt source i)
-                        next (when (< (inc i) length) (.charAt source (inc i)))]
-                    (case state
-                      :line (if (= c \newline)
-                              (do (.append out c) (recur (inc i) :normal false))
-                              (recur (inc i) :line false))
-                      :block (if (and (= c \*) (= next \/))
-                               (recur (+ i 2) :normal false)
-                               (recur (inc i) :block false))
-                      :string (do (.append out c)
-                                  (recur (inc i)
-                                         (if (and (= c \") (not escape?)) :normal :string)
-                                         (and (= c \\) (not escape?))))
-                      (cond (and (= c \/) (= next \/)) (recur (+ i 2) :line false)
-                            (and (= c \/) (= next \*)) (do (.append out \space)
-                                                           (recur (+ i 2) :block false))
-                            (= c \") (do (.append out c) (recur (inc i) :string false))
-                            :else (do (.append out c) (recur (inc i) :normal false)))))))
-        result (StringBuilder.)]
-    (loop [i 0
-           string? false
-           escape? false]
-      (when (< i (count clean))
-        (let [c (.charAt clean i)
-              after (when (and (= c \,) (not string?))
-                      (first (drop-while #(Character/isWhitespace ^char %)
-                                         (subs clean (inc i)))))
-              skip? (and (= c \,) (not string?) (#{\] \}} after))]
-          (when-not skip? (.append result c))
-          (recur (inc i)
-                 (if (and (= c \") (not escape?)) (not string?) string?)
-                 (and (= c \\) (not escape?))))))
-    (json/read-str (str result) :key-fn keyword)))
+  (let [without-comments (str/replace (slurp file)
+                                      #"\"(?:\\.|[^\"\\])*\"|//[^\r\n]*|/\*[\s\S]*?\*/"
+                                      #(if (= \" (first %)) % " "))
+        without-trailing-commas (str/replace without-comments
+                                             #"\"(?:\\.|[^\"\\])*\"|,\s*[\]}]"
+                                             #(if (= \" (first %)) % (subs % 1)))]
+    (json/read-str without-trailing-commas :key-fn keyword)))
+
+(defn- sha-bytes
+  [bytes]
+  (format "%064x"
+          (BigInteger. 1
+                       (.digest (MessageDigest/getInstance "SHA-256") bytes))))
 
 (defn sha
   "Returns a deterministic SHA-256 digest of UTF-8 input."
   [text]
-  (format "%064x"
-          (BigInteger. 1
-                       (.digest (MessageDigest/getInstance "SHA-256")
-                                (.getBytes (str text) "UTF-8")))))
+  (sha-bytes (.getBytes (str text) "UTF-8")))
 
 (defn fail!
   "Throws a bounded structured build diagnostic."
   [code path received repair]
   (d/fail! code nil :application path :valid-configuration received repair))
 
-(def app-keys
-  #{:name :entry :paths :output :history :optimizations :native-config :config :profile
-    :profiles :extensions})
-
-(defn closed-map!
-  "Rejects undeclared configuration keys before effects."
-  [value allowed path]
-  (when-not (map? value) (fail! :configuration path (type value) "Supply a map."))
-  (doseq [key (keys value)]
-    (when-not (allowed key)
-      (fail! :unknown-key (conj path key) key "Remove unsupported configuration key.")))
-  value)
+(def ^:private App
+  (contracts/closed
+    {:name :keyword
+     :entry [:fn symbol?]
+     :paths [:vector :string]
+     :output :string
+     :history :string
+     :optimizations [:= :simple]
+     :native-config :string
+     :config :map
+     :profile :keyword
+     :profiles [:map-of :keyword :map]
+     :extensions contracts/extensions}
+    #{:name :entry}))
 
 (defn config!
   "Checks whole-application native configuration against selected declarations."
   [config descriptors]
-  (d/check! contracts/configuration config nil :application [:config])
+  (config/validate! config descriptors)
   (when-not (and (string? (:name config))
                  (re-matches #"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?" (:name config)))
     (fail! :app-name
@@ -130,14 +101,11 @@
              [:compatibility_flags]
              flag
              "Select an honored target-profile flag.")))
-  (let [rpc? (some #(some (fn [h]
-                            (= :rpc (:kind h)))
-                          (:handlers %))
-                   descriptors)]
+  (let [rpc? (some #(= :rpc (:kind %)) (mapcat :handlers descriptors))]
     (when (and rpc? (not (some #{"js_rpc"} (:compatibility_flags config))))
       (fail! :required-flag [:compatibility_flags]
              "js_rpc" "Keep js_rpc for plain Cell RPC.")))
-  (config/validate! config descriptors))
+  config)
 
 (defn reachable-namespaces
   "Returns the actual analyzed entry graph; unrelated classpath declarations are excluded."
@@ -154,10 +122,10 @@
 
 (defn descriptors
   "Collects compiler metadata only from the selected application graph."
-  [compiler entry]
+  [compiler reachable]
   (->> (:cljs.analyzer/namespaces @compiler)
        (filter (fn [[ns _]]
-                 ((reachable-namespaces compiler entry) ns)))
+                 (reachable ns)))
        (map second)
        (mapcat #(vals (:defs %)))
        (keep :fast-twitch.celld/descriptor)
@@ -178,14 +146,24 @@
              "Use distinct stable export/binding identities."
                {:sources (mapv :source ds)})))
 
+(defn- cells
+  [descriptors]
+  (filter #(and (= :cell (:kind %)) (not (:facet? %))) descriptors))
+
 (defn history!
   "Checks compiled classes against explicitly adopted SQLite history."
   [history descriptors]
-  (doseq [record history] (closed-map! record #{:tag :new_sqlite_classes} [:history]))
+  (d/check! [:vector
+             (contracts/closed
+               {:tag :string :new_sqlite_classes [:vector :string]}
+               #{:tag})]
+            history
+            nil
+            :application
+            [:history])
   (let [adopted (set (mapcat :new_sqlite_classes history))
         current (set (map :export
-                       (filter #(and (= :cell (:kind %)) (not (:facet? %)))
-                         descriptors)))]
+                       (cells descriptors)))]
     (when (seq (remove adopted current))
       (fail! :unadopted-class
              [:history]
@@ -201,14 +179,12 @@
 (defn generated-config
   "Derives minimal native configuration from declarations and adopted history."
   [app ds history main]
-  (let [cells (filter #(and (= :cell (:kind %)) (not (:facet? %))) ds)
+  (let [cells (cells ds)
         workflows (filter #(= :workflow (:kind %)) ds)
-        required (when (some #(some (fn [h]
-                                      (= :rpc (:kind h)))
-                                    (:handlers %))
-                             ds)
+        handlers (mapcat :handlers ds)
+        required (when (some #(= :rpc (:kind %)) handlers)
                    ["js_rpc"])
-        base {:name (:name app)
+        base {:name (names/identifier (:name app))
               :main main
               :no_bundle true
               :compatibility_date (:compatibility-date target)
@@ -218,10 +194,7 @@
                                                    :class_name (:export x)})
                                             cells)}
               :migrations history}
-        crons (vec (mapcat #(mapcat (fn [h]
-                                      (get-in h [:options :crons] []))
-                              (:handlers %))
-                     ds))
+        crons (vec (mapcat #(get-in % [:options :crons] []) handlers))
         base (cond-> base (seq crons) (assoc :triggers {:crons crons}))
         base (cond-> base
                (seq workflows) (assoc :workflows
@@ -286,17 +259,8 @@
         js (str staging "/compiled.js")
         thread (Thread/currentThread)
         previous-loader (.getContextClassLoader thread)
-        loader (clojure.lang.DynamicClassLoader. (clojure.lang.RT/baseLoader))
-        entry (io/file staging "entry-src/fast_twitch/celld/build_entry.cljs")
-        write-entry (fn [namespaces]
-                      (spit entry
-                            (pr-str (list 'ns
-                                          'fast-twitch.celld.build-entry
-                                          (list* :require (map vector namespaces))))))]
+        loader (clojure.lang.DynamicClassLoader. (clojure.lang.RT/baseLoader))]
     (doseq [path (:paths app ["src"])] (.addURL loader (.toURL (.toURI (io/file path)))))
-    (io/make-parents entry)
-    (write-entry [(:entry app)])
-    (.addURL loader (.toURL (.toURI (io/file staging "entry-src"))))
     (.setContextClassLoader thread loader)
     (try
       (with-bindings {clojure.lang.Compiler/LOADER loader}
@@ -305,46 +269,38 @@
                                                      (repeat false))]
             (compiler/with-core-cljs))
           (binding [analyzer/*cljs-warning-handlers* [strict-warning!]]
-            (analyzer/analyze-file entry)))
-        (let [runtime (sort (filter #(str/starts-with? (str %) "fast-twitch.celld.")
-                              (reachable-namespaces compiler (:entry app))))]
-          (write-entry (distinct (concat runtime [(:entry app)]))))
-        (cljs/build entry
-                    {:main 'fast-twitch.celld.build-entry
-                     :optimizations :simple
-                     :output-to js
-                     :output-dir (str staging "/cljs")
-                     :target :bundle
-                     :warning-handlers [strict-warning!]
-                     :infer-externs true
-                     :source-map false
-                     :pretty-print false
-                     :parallel-build false}
-                    compiler))
-      (finally (.setContextClassLoader thread previous-loader)))
-    {:descriptors (descriptors compiler (:entry app))
-     :js js
-     :runtime-namespaces (vec (sort (map str
-                                      (reachable-namespaces compiler (:entry app)))))
-     :external-modules
-       (vec (sort (for [namespace (reachable-namespaces compiler (:entry app))
-                        :let [specifier (str namespace)]
-                        :when (and (or (str/starts-with? specifier "node:")
-                                       (str/starts-with? specifier "cloudflare:"))
-                                   (get-in @compiler
-                                           [:js-dependency-index specifier :external?]))]
-                    specifier)))
-     :native-imports (cond-> #{}
-                       ((reachable-namespaces compiler (:entry app))
-                         'fast-twitch.celld.communication)
-                         (conj :tcp)
-                       ((reachable-namespaces compiler (:entry app))
-                         'fast-twitch.celld.services.workflows)
-                         (conj :workflow-errors))}))
+            (analyzer/analyze-file (cljs/ns->source (:entry app)))))
+        (let [reachable (reachable-namespaces compiler (:entry app))]
+          (cljs/build (set (filter cljs/ns->source reachable))
+                      {:optimizations :simple
+                       :output-to js
+                       :output-dir (str staging "/cljs")
+                       :target :bundle
+                       :warning-handlers [strict-warning!]
+                       :infer-externs true
+                       :source-map false
+                       :pretty-print false
+                       :parallel-build false}
+                      compiler)
+          {:descriptors (descriptors compiler reachable)
+           :js js
+           :runtime-namespaces (vec (sort (map str
+                                            reachable)))
+           :external-modules
+             (vec (sort (for
+                          [namespace reachable
+                           :let [specifier (str namespace)]
+                           :when (and (or (str/starts-with? specifier "node:")
+                                          (str/starts-with? specifier "cloudflare:"))
+                                      (get-in @compiler
+                                              [:js-dependency-index specifier
+                                               :external?]))]
+                          specifier)))}))
+      (finally (.setContextClassLoader thread previous-loader)))))
 
 (defn package!
   "Packages the final native ESM artifact and automatic named exports."
-  [js ds staging native-imports external-modules]
+  [js ds staging generation external-modules]
   (doseq [specifier external-modules]
     (when-not (supported-native-modules specifier)
       (fail! :runtime-import
@@ -353,42 +309,29 @@
              "Import a module implemented by the pinned Celld target.")))
   (let
     [raw (str staging "/entry.js")
-     output (str staging "/bundle.mjs")
-     bases? (some #(or (= :workflow (:kind %))
-                       (and (= :worker (:kind %)) (not= "default" (:export %))))
-                  ds)
+     output (str generation "/bundle.mjs")
      imports
-       (str
-         (apply str
-           (map-indexed (fn [index specifier]
-                          (str "import * as ft_native_module_"
-                               index
-                               " from "
-                               (json/write-str specifier)
-                               ";\nglobalThis["
-                               (json/write-str specifier)
-                               "]=ft_native_module_"
-                               index
-                               ";\n"))
-                        external-modules))
-         (when (native-imports :tcp)
-           "import {connect as ft_native_connect} from 'cloudflare:sockets';\nglobalThis.__ft_connect=ft_native_connect;\n")
-         (when (native-imports :workflow-errors)
-           "import {NonRetryableError} from 'cloudflare:workflows';\nglobalThis.__ft_NonRetryableError=NonRetryableError;\n")
-         (when bases?
-           "import {WorkerEntrypoint, WorkflowEntrypoint} from 'cloudflare:workers';\nglobalThis.__ft_WorkerEntrypoint=WorkerEntrypoint; globalThis.__ft_WorkflowEntrypoint=WorkflowEntrypoint;\n"))
-     exports (str/join "\n"
-                       (map-indexed (fn [i x]
-                                      (str "const ft_export_"
-                                           i
-                                           "=globalThis["
-                                           (json/write-str (:export-root x))
-                                           "];\nexport {ft_export_"
-                                           i
-                                           " as "
-                                           (:export x)
-                                           "};"))
-                                    ds))]
+       (apply str
+         (map-indexed
+           (fn [index specifier]
+             (format
+               "import * as ft_native_module_%d from %s;\nglobalThis[%s]=ft_native_module_%d;\n"
+               index
+               (json/write-str specifier)
+               (json/write-str specifier)
+               index))
+           external-modules))
+     exports (str/join
+               "\n"
+               (map-indexed
+                 (fn [i x]
+                   (format
+                     "const ft_export_%d=globalThis[%s];\nexport {ft_export_%d as %s};"
+                     i
+                     (json/write-str (:export-root x))
+                     i
+                     (:export x)))
+                 ds))]
     (spit raw (str imports (slurp js) "\n" exports "\n"))
     (let [result (shell/sh "node_modules/.bin/esbuild"
                            raw
@@ -401,11 +344,15 @@
                         {:code :fast-twitch.celld.build/bundler :detail (:err result)}))))
     output))
 
+(defn- client-namespace
+  [app]
+  (symbol (str "fast-twitch.celld.generated." (names/identifier (:name app)))))
+
 (defn generate-clients!
   "Writes deterministic case-preserving RPC clients into staging."
   [output app descriptors]
   (let
-    [ns (symbol (str "fast-twitch.celld.generated." (:name app)))
+    [ns (client-namespace app)
      path (str output
                "/generated-src/"
                (-> (str ns)
@@ -418,28 +365,24 @@
              :when (= :rpc (:kind handler))]
          (let [function (symbol (str (:export cell)
                                      "-"
-                                     (names/identifier (get-in handler
-                                                               [:options :method]))
+                                     (:member handler)
                                      "!"))
                options (:options handler)]
-           (list
-             'defn
-             (with-meta function {:async true})
-             (str
-               "Native "
-               (:export cell)
-               "."
-               (:method options)
-               " client. Receives its stub first; schemas/codecs match the server. No implementation namespace is loaded.")
-             '[stub & args]
-             (list 'cljs.core/await
-                   (list 'rpc/call!
-                         'stub
-                         (:method options)
-                         '(vec args)
-                         {:args-schema (:args options)
-                          :returns (:returns options)
-                          :codec (:codec options)})))))]
+           `(~'defn
+             ~(with-meta function {:async true})
+             ~(format
+                "Native %s.%s client. Takes its stub first; schemas/codecs match the server."
+                (:export cell)
+                (:member handler))
+             [~'stub & ~'args]
+             (cljs.core/await
+               (~'rpc/call!
+                ~'stub
+                ~(:method options)
+                (~'vec ~'args)
+                ~{:args-schema (:args options)
+                  :returns (:returns options)
+                  :codec (:codec options)})))))]
     (let [symbols (map second methods)]
       (when-not (= (count symbols) (count (distinct symbols)))
         (fail! :client-symbol-collision
@@ -480,40 +423,45 @@
         (io/copy file target)))))
 
 (defn stage-resources!
-  "Copies and hashes declared assets and local container contexts into staging."
-  [config staging base]
-  (let [resources (atom {})]
-    (when-let [directory (get-in config [:assets :directory])]
-      (let [source (resolve-path base directory)]
-        (when-not (.isDirectory source)
-          (fail! :resource-path
-                 [:assets :directory]
-                 directory
-                 "Supply an existing asset directory."))
-        (copy-tree! source (str staging "/resources/assets"))
-        (swap! resources assoc :assets "resources/assets")))
-    (doseq [[index container] (map-indexed vector (:containers config))]
-      (let [source (resolve-path base (:image container))]
-        (when (.isFile source)
-          (let [destination (str "resources/container-" index)]
-            (copy-tree! (.getParentFile source) (str staging "/" destination))
-            (swap! resources assoc index (str destination "/" (.getName source)))))))
-    {:paths @resources
-     :sha (sha (pr-str (for [file (sort-by str (file-seq (io/file staging "resources")))
+  "Stages declared resources directly in the publishable generation and hashes them once."
+  [config generation base]
+  (let [resources (vec
+                    (concat
+                      (when-let [directory (get-in config [:assets :directory])]
+                        (let [source (resolve-path base directory)]
+                          (when-not (.isDirectory source)
+                            (fail! :resource-path
+                                   [:assets :directory]
+                                   directory
+                                   "Supply an existing asset directory."))
+                          [{:config-path [:assets :directory]
+                            :source source
+                            :path "resources/assets"}]))
+                      (for [[index container] (map-indexed vector (:containers config))
+                            :let [source (resolve-path base (:image container))]
+                            :when (.isFile source)]
+                        {:config-path [:containers index :image]
+                         :source source
+                         :path (str "resources/container-" index
+                                    "/" (.getName source))})))]
+    (doseq [{:keys [source path]} resources]
+      (let [directory? (.isDirectory source)]
+        (copy-tree! (if directory? source (.getParentFile source))
+                    (io/file generation
+                             (if directory? path (.getParent (io/file path)))))))
+    {:resources resources
+     :sha (sha (pr-str (for [file (sort-by str
+                                           (file-seq (io/file generation "resources")))
                              :when (.isFile file)]
-                         [(str (.relativize (.toPath (io/file staging)) (.toPath file)))
-                          (format "%064x"
-                                  (BigInteger.
-                                    1
-                                    (.digest (MessageDigest/getInstance "SHA-256")
-                                             (Files/readAllBytes (.toPath file)))))])))}))
+                         [(str (.relativize (.toPath generation) (.toPath file)))
+                          (sha-bytes (Files/readAllBytes (.toPath file)))])))}))
 
 (defn validate-clients!
   "Compiles generated RPC clients before the native generation can publish."
-  [_source staging app]
+  [generation app staging]
   (compile! (assoc app
-              :entry (symbol (str "fast-twitch.celld.generated." (:name app)))
-              :paths (conj (vec (:paths app ["src"])) (str staging "/generated-src")))
+              :entry (client-namespace app)
+              :paths (conj (vec (:paths app ["src"])) (str generation "/generated-src")))
             (str staging "/client-validation")))
 
 (defn local-input-roots
@@ -549,42 +497,49 @@
                            (cons (str file) (map #(str (resolve-path root %)) paths)))))))
         roots))))
 
-(defn input-fingerprint
-  "Hashes compile/config/resource inputs; a concurrent source edit cannot publish a mixed generation."
+(defn input-roots
+  "Shares current application, dependency and authority-relative resource roots with dev."
   [app app-file]
-  (let [base (if-let [file (:native-config app)]
-               (or (.getParent (io/file file)) ".")
-               ".")
-        config (if-let [file (:native-config app)]
-                 (read-native file)
-                 (merge (:config app) (get-in app [:profiles (:profile app :release)])))
-        roots (concat (local-input-roots)
-                      ["src" "resources" "dev" "../fast-twitch/src"
-                       "../fast-twitch/resources" "deps.edn" "package-lock.json" app-file]
-                      (:paths app)
-                      [(:history app "class-history.edn") (:native-config app)]
-                      [(when-let [directory (get-in config [:assets :directory])]
-                         (str (resolve-path base directory)))]
-                      (for [entry (:containers config)
-                            :let [image (resolve-path base (:image entry))]
-                            :when (.isFile image)]
-                        (.getParent image)))
-        files (distinct (for [root (remove nil? roots)
-                              file (tree-seq #(and (.isDirectory %)
-                                                   (not (#{".git" ".celld" ".celld-build"
-                                                           "target" "node_modules"}
-                                                         (.getName %))))
-                                             #(or (seq (.listFiles %)) [])
-                                             (io/file root))
-                              :when (.isFile file)]
-                          file))]
-    (sha (pr-str (for [file (sort-by str files)]
-                   [(str file)
-                    (format "%064x"
-                            (BigInteger. 1
-                                         (.digest (MessageDigest/getInstance "SHA-256")
-                                                  (Files/readAllBytes (.toPath
-                                                                        file)))))])))))
+  (let [native-file (:native-config app)
+        base (if native-file (or (.getParent (io/file native-file)) ".") ".")
+        config (if native-file
+                 (try (read-native native-file) (catch Exception _ {}))
+                 (merge (:config app) (get-in app [:profiles (:profile app :release)])))]
+    (concat (local-input-roots)
+            ["src" "resources" "dev" "deps.edn" "package-lock.json" app-file]
+            (:paths app)
+            [(:history app "class-history.edn") native-file]
+            (when-let [directory (get-in config [:assets :directory])]
+              [(str (resolve-path base directory))])
+            (for [entry (:containers config)
+                  :let [image (resolve-path base (:image entry))]
+                  :when (.isFile image)]
+              (.getParent image)))))
+
+(defn input-files
+  "Enumerates stable, distinct regular inputs while excluding generated and native state."
+  [roots output]
+  (let [output (.getCanonicalFile (io/file output))]
+    (sort-by str
+             (distinct
+               (for [root (remove nil? roots)
+                     file (tree-seq
+                            #(and (.isDirectory %)
+                                  (not= output (.getCanonicalFile %))
+                                  (not (#{".git" ".celld" ".celld-build" "target"
+                                          "node_modules" ".cpcache" ".tools" "scratch"}
+                                        (.getName %))))
+                            #(or (seq (.listFiles %)) [])
+                            (io/file root))
+                     :when (.isFile file)]
+                 (.getCanonicalFile file))))))
+
+(defn input-fingerprint
+  "Hashes the shared input set so concurrent edits cannot publish a mixed generation."
+  [app app-file]
+  (sha (pr-str (for [file (input-files (input-roots app app-file)
+                                       (:output app ".celld-build"))]
+                 [(str file) (sha-bytes (Files/readAllBytes (.toPath file)))]))))
 
 (defn- build-app!
   "Builds or inspects one minimal app.edn. Every invocation uses a fresh compiler
@@ -592,14 +547,11 @@
   [app-file action]
   (when-not (#{:build :validate :inspect :prepare-config} action)
     (fail! :action [:action] action "Use build, validate, inspect or prepare-config."))
-  (let [app (closed-map! (read-edn app-file) app-keys [])
-        _ (when-not (symbol? (:entry app))
-            (fail! :entry [:entry] (:entry app) "Supply the entry namespace symbol."))
-        _ (when-not (= :simple (:optimizations app :simple))
-            (fail! :optimization
-                   [:optimizations]
-                   (:optimizations app)
-                   "Only qualified :simple is currently enabled."))
+  (let [app (d/check! App (read-edn app-file) {:file app-file} :application [])
+        _ (when (and (:native-config app) (or (:config app) (:profiles app)))
+            (fail! :authoritative-config []
+                   :both
+                     "Choose generated or existing-native-file mode."))
         output (:output app ".celld-build")
         lock-file (io/file output ".build.lock")]
     (io/make-parents lock-file)
@@ -607,51 +559,41 @@
                 channel (.getChannel raf)
                 _lock (.lock channel)]
       (let
-        [_ (when-not (= app (closed-map! (read-edn app-file) app-keys []))
+        [_ (when-not (= app (read-edn app-file))
              (fail!
                :inputs-changed [:app]
                :lock-wait
                  "Rebuild the changed application input after acquiring its output lock."))
          input-sha (input-fingerprint app app-file)
          staging (str output "/staging/" (java.util.UUID/randomUUID))
-         _ (.mkdirs (io/file staging))
-         {:keys [descriptors js native-imports external-modules runtime-namespaces]}
-           (compile! app staging)
+         generation (io/file staging "generation")
+         _ (.mkdirs generation)
+         {:keys [descriptors js external-modules runtime-namespaces]} (compile! app
+                                                                                staging)
+         native-config (when-let [file (:native-config app)] (read-native file))
          history-file (:history app "class-history.edn")
          history (config/native-values
-                   (if-let [file (:native-config app)]
-                     (:migrations (read-native file) [])
+                   (if native-config
+                     (:migrations native-config [])
                      (if (.exists (io/file history-file)) (read-edn history-file) [])))]
         (duplicates! descriptors :export)
         (duplicates! descriptors :binding)
         (when-let [profiles (:profiles app)]
-          (when (:native-config app)
-            (fail! :authoritative-config
-                   [:profiles]
-                   profiles
-                   "Existing-native-file mode has one configuration authority."))
-          (when-not (and (map? profiles) (every? keyword? (keys profiles)))
-            (fail! :profile [:profiles] profiles "Use a map of named profile maps."))
-          (doseq [[profile value] profiles]
-            (when-not (map? value)
-              (fail! :profile
-                     [:profiles profile]
-                     value
-                     "Supply a profile configuration map."))
-            (config! (generated-config (assoc app :profile profile)
-                                       descriptors
-                                       history
-                                       "bundle.mjs")
-                     descriptors)))
+          (doseq [profile (keys profiles)]
+            (when (or (#{:inspect :prepare-config} action)
+                      (not= profile (:profile app :release)))
+              (config! (generated-config (assoc app :profile profile)
+                                         descriptors
+                                         history
+                                         "bundle.mjs")
+                       descriptors))))
         (case action
           :inspect (do (prn descriptors) {:descriptors descriptors})
           :prepare-config
             (let [adopted (set (mapcat :new_sqlite_classes history))
                   new-classes (vec (sort (remove adopted
                                            (map :export
-                                             (filter #(and (= :cell (:kind %))
-                                                           (not (:facet? %)))
-                                               descriptors)))))
+                                             (cells descriptors)))))
                   candidate (cond-> history
                               (seq new-classes) (conj {:tag (str "v"
                                                                  (inc (count history)))
@@ -661,109 +603,79 @@
               {:history candidate})
           (let
             [_ (history! history descriptors)
-             client-source (generate-clients! staging app descriptors)
-             _ (validate-clients! client-source staging app)
-             client-fingerprint (sha (slurp client-source))
-             preliminary-config (if-let [file (:native-config app)]
-                                  (read-native file)
-                                  (generated-config app descriptors history "bundle.mjs"))
-             _ (binding [d/*source* (if-let [file (:native-config app)]
-                                      {:file (.getAbsolutePath (io/file file))}
-                                      d/*source*)]
-                 (config! preliminary-config descriptors))
-             resource-inputs (stage-resources! preliminary-config
-                                               staging
-                                               (if-let [file (:native-config app)]
-                                                 (or (.getParent (io/file file)) ".")
-                                                 "."))
-             bundle (package! js descriptors staging native-imports external-modules)
-             fingerprint (sha (pr-str {:bundle-sha (sha (slurp bundle))
-                                       :client-sha client-fingerprint
-                                       :resources-sha (:sha resource-inputs)
-                                       :descriptors descriptors
-                                       :history history
-                                       :app app
-                                       :input-sha input-sha
-                                       :native-config preliminary-config
-                                       :target (:target target)
-                                       :runtime-namespaces runtime-namespaces
-                                       :external-modules external-modules}))
-             relative-main (str "generations/" fingerprint "/bundle.mjs")
-             config
-               (if-let [file (:native-config app)]
-                 (let [native (read-native file)]
-                   (when (or (:config app) (:profiles app))
-                     (fail! :authoritative-config []
-                            :both "Choose generated or existing-native-file mode."))
-                   (when-not (= (set (map (fn [d] [(:binding d) (:export d)])
-                                       (filter #(and (= :cell (:kind %))
-                                                     (not (:facet? %)))
-                                         descriptors)))
-                                (set (map (fn [d] [(:name d) (:class_name d)])
-                                       (get-in native [:durable_objects :bindings]))))
+             preliminary-config
+               (if native-config
+                 (do
+                   (when-not (= (set (map (juxt :binding :export) (cells descriptors)))
+                                (set (map (juxt :name :class_name)
+                                       (get-in native-config
+                                               [:durable_objects :bindings]))))
                      (fail!
                        :export-config []
                        :mismatch
                          "Match native binding names and classes to compiled declarations."))
-                   (assoc native :main relative-main))
-                 (generated-config app descriptors history relative-main))
-             config (cond-> config
-                      (get-in resource-inputs [:paths :assets])
-                        (assoc-in [:assets :directory]
-                          (str "generations/" fingerprint
-                               "/" (get-in resource-inputs [:paths :assets])))
-                      (seq (:containers config))
-                        (update
-                          :containers
-                          (fn [containers]
-                            (mapv (fn [index entry]
-                                    (if-let [path (get-in resource-inputs [:paths index])]
-                                      (assoc entry
-                                        :image (str "generations/" fingerprint "/" path))
-                                      entry))
-                              (range)
-                              containers))))
-             _ (config! config descriptors)
-             manifest {:target (:target target)
-                       :fingerprint fingerprint
-                       :descriptors descriptors
-                       :main relative-main
-                       :runtime-namespaces runtime-namespaces
-                       :external-modules external-modules
-                       :config-sha (sha (json/write-str config :key-fn names/text))
-                       :client-source-sha client-fingerprint
-                       :input-sha input-sha
+                   native-config)
+                 (generated-config app descriptors history "bundle.mjs"))
+             _ (binding [d/*source* (if-let [file (:native-config app)]
+                                      {:file (.getAbsolutePath (io/file file))}
+                                      d/*source*)]
+                 (config! preliminary-config descriptors))
+             client-source (generate-clients! generation app descriptors)
+             _ (validate-clients! generation app staging)
+             resource-inputs (stage-resources! preliminary-config
+                                               generation
+                                               (if-let [file (:native-config app)]
+                                                 (or (.getParent (io/file file)) ".")
+                                                 "."))
+             bundle (package! js descriptors staging generation external-modules)
+             artifact {:bundle-sha (sha (slurp bundle))
+                       :client-source-sha (sha (slurp client-source))
                        :resources-sha (:sha resource-inputs)
-                       :clients (str "generations/" fingerprint "/generated-src")
-                       :qualification :unrun}]
+                       :descriptors descriptors
+                       :history history
+                       :app app
+                       :input-sha input-sha
+                       :native-config preliminary-config
+                       :target (:target target)
+                       :runtime-namespaces runtime-namespaces
+                       :external-modules external-modules}
+             fingerprint (sha (pr-str artifact))
+             generation-path #(str "generations/" fingerprint "/" %)
+             relative-main (generation-path "bundle.mjs")
+             config (reduce
+                      (fn [config {:keys [config-path path]}]
+                        (assoc-in config config-path (generation-path path)))
+                      (assoc preliminary-config :main relative-main)
+                      (:resources resource-inputs))
+             manifest (assoc (select-keys artifact
+                                          [:target :descriptors :runtime-namespaces
+                                           :external-modules :client-source-sha :input-sha
+                                           :resources-sha])
+                        :fingerprint fingerprint
+                        :main relative-main
+                        :config-sha (sha (json/write-str config :key-fn names/text))
+                        :clients (generation-path "generated-src")
+                        :qualification :unrun)]
             (when-not (= input-sha (input-fingerprint app app-file))
               (fail! :inputs-changed []
                      :concurrent-edit "Wait for source edits to finish, then rebuild."))
             (when-not (= action :validate)
-              (let [dest (io/file output relative-main)
-                    manifest-file (io/file (.getParentFile dest) "manifest.edn")]
-                (if (.exists manifest-file)
-                  (when-not (= manifest (read-edn manifest-file))
+              (let [dest (io/file output "generations" fingerprint)
+                    manifest-file (io/file dest "manifest.edn")]
+                (if (.exists dest)
+                  (when-not (and (.isFile manifest-file)
+                                 (= manifest (read-edn manifest-file)))
                     (fail!
                       :generation-conflict [:generation fingerprint]
                       :immutable-generation
                         "Preserve this generation and correct the fingerprint inputs before rebuilding."))
                   (do
                     (io/make-parents dest)
-                    (io/copy (io/file bundle) dest)
-                    (let [clients-dest (io/file (.getParentFile dest) "generated-src")]
-                      (doseq [file (file-seq (io/file staging "generated-src"))
-                              :when (.isFile file)]
-                        (let [relative (.relativize (.toPath (io/file staging
-                                                                      "generated-src"))
-                                                    (.toPath file))
-                              target-file (io/file clients-dest (str relative))]
-                          (io/make-parents target-file)
-                          (io/copy file target-file))))
-                    (when (.isDirectory (io/file staging "resources"))
-                      (copy-tree! (io/file staging "resources")
-                                  (io/file (.getParentFile dest) "resources")))
-                    (spit manifest-file (pr-str manifest))))
+                    (spit (io/file generation "manifest.edn") (pr-str manifest))
+                    (Files/move (.toPath generation)
+                                (.toPath dest)
+                                (into-array StandardCopyOption
+                                            [StandardCopyOption/ATOMIC_MOVE]))))
                 ;; Config is the sole atomic generation pointer used by celld dev.
                 (atomic! (str output "/wrangler.json")
                          (json/write-str config :key-fn names/text :escape-slash false))
@@ -787,6 +699,11 @@
          (let [diagnostic (diagnostics/diagnostic error)]
            (binding [*out* *err*] (prn {:status :failed :diagnostic diagnostic}))
            (try (let [app (read-edn (or app-file "app.edn"))
+                      _ (when (and (:native-config app)
+                                   (or (:config app) (:profiles app)))
+                          (fail! :authoritative-config []
+                                 :both
+                                   "Choose generated or existing-native-file mode."))
                       output (:output app ".celld-build")]
                   (atomic! (str output "/status.edn")
                            (pr-str {:state :stale :diagnostic diagnostic})))

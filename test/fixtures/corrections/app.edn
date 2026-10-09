@@ -1,4 +1,4 @@
-{:name "corrections"
+{:name :corrections
  :entry fixture.corrections
  :paths ["test/fixtures/corrections/src"]
  :output "test/fixtures/corrections/.celld-build"

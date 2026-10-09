@@ -4,7 +4,7 @@
             [cljs.core :refer [await]]
             [fast-twitch.celld.context :as context]
             [fast-twitch.celld.rpc :as rpc]
-            [fast-twitch.celld.storage :as storage]
+            [fast-twitch.celld.storage :as storage :refer-macros [with-transaction-sync]]
             [fast-twitch.celld.storage.kv :as kv]
             [fast-twitch.celld.sql :as sql]
             [fast-twitch.celld.alarms :as alarms]
@@ -13,8 +13,7 @@
             [fast-twitch.celld.names :as names]
   )
   (:require-macros [fast-twitch.celld.macros :refer
-                    [defcell defrpc deffetch defworker defcell-init defalarm
-                     with-transaction-sync]])
+                    [defcell defrpc deffetch defworker defcell-init defalarm]])
   (:refer-global :only [Promise Date Map Set BigInt Uint8Array Array crypto]))
 
 (defcell-init
@@ -135,18 +134,19 @@
           restored (:value (await (storage/get! s :native-graph)))
           _ (await (storage/put! s (keyword "") false))
           empty-key (:value (await (storage/get! s (keyword ""))))
-          _ (await (storage/put! s {:coverage/a 1 :coverage/b 2 :coverage/c 3}))
+          _ (await (storage/put-many! s {:coverage/a 1 :coverage/b 2 :coverage/c 3}))
           listed (await (storage/list! s
                                        {:prefix (keyword "coverage/")
                                         :startAfter :coverage/a
                                         :end :coverage/d
                                         :reverse true
                                         :limit 2}))
-          _ (await (storage/put! s
-                                 (into {}
-                                       (for [n (range 14)]
-                                         [(keyword (str "ordered/"
-                                                        (.padStart (str n) 2 "0"))) n]))))
+          _ (await (storage/put-many! s
+                                      (into {}
+                                            (for [n (range 14)]
+                                              [(keyword (str "ordered/"
+                                                             (.padStart (str n) 2 "0")))
+                                               n]))))
           ordered (await (storage/list-entries! s
                                                 {:prefix (keyword "ordered/")
                                                  :startAfter (keyword "ordered/00")
@@ -181,10 +181,10 @@
                          (catch :default _
                            (= {:found? false}
                               (await (storage/get! s :coverage/rolled)))))
-          batch-rejected? (try (await (storage/put! s
-                                                    {:coverage/before-bad 1
-                                                     :coverage/bad (fn []
-                                                                     nil)}))
+          batch-rejected? (try (await (storage/put-many! s
+                                                         {:coverage/before-bad 1
+                                                          :coverage/bad (fn []
+                                                                          nil)}))
                                false
                                (catch :default _
                                  (= {:found? false}

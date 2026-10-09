@@ -1,4 +1,4 @@
-{:name "workflows-loaders-facets"
+{:name :workflows-loaders-facets
  :entry example.orchestration-app
  :paths ["examples/05-workflows-loaders-and-facets/src"]
  :output "examples/05-workflows-loaders-and-facets/.celld-build"

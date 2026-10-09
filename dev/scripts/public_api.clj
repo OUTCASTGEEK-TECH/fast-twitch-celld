@@ -16,17 +16,25 @@
               namespace (second (first fs))]
         form fs
         :when (and (seq? form)
-                   (= 'defn (first form))
+                   (#{'defn 'mx/defn} (first form))
                    (not (or (:private (meta (second form)))
                             (:no-doc (meta (second form))))))
         :let [[_ name & rest] form
+              rest (if (= :- (first rest)) (nnext rest) rest)
               [doc rest] (if (string? (first rest)) [(first rest) (next rest)] [nil rest])
               arglists (if (vector? (first rest)) [(first rest)] (map first rest))]]
     {:namespace (str namespace)
      :name (str name)
      :file (str file)
      :doc doc
-     :arglists (mapv pr-str arglists)
+     :arglists (mapv #(pr-str (loop [args %
+                                     out []]
+                                (if (seq args)
+                                  (if (= :- (first args))
+                                    (recur (nnext args) out)
+                                    (recur (next args) (conj out (first args))))
+                                  out)))
+                 arglists)
      :native-members (vec (distinct (for [x (tree-seq coll? seq form)
                                           :when (and (seq? x)
                                                      (symbol? (first x))

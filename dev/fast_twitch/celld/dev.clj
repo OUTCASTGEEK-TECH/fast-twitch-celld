@@ -37,7 +37,7 @@
       (io/file root "src/example/app.cljs")
       "(ns example.app\n  (:require-macros [fast-twitch.celld.macros :refer [deffetch defworker]]))\n(deffetch hello [context request] {:status 200 :body \"Hello from CLJS\"})\n(defworker App {:include [hello]})\n")
     (spit (io/file root "app.edn")
-          (str (pr-str {:name app-name
+          (str (pr-str {:name (keyword app-name)
                         :entry 'example.app
                         :paths [(str directory "/src")]
                         :output (str directory "/.celld-build")
@@ -49,29 +49,16 @@
        :next
          "build app.edn; add Cell declarations and review prepare-config history candidates"})))
 
-(def excluded
-  #{".git" ".celld" ".celld-build" "target" "node_modules" ".cpcache" ".tools" "scratch"})
-
-(defn source-files
-  "Returns source files excluding generated output and local durable state."
-  [root]
-  (filter #(.isFile %)
-    (tree-seq #(and (.isDirectory %) (not (excluded (.getName %))))
-              #(or (seq (.listFiles %)) [])
-              (io/file root))))
-
 (defn signature
   "Detects application, macro, dependency and resource edits for supervised development."
   [app-file]
-  ;; Include local dependency edits and macro/config/resource changes. Compiler
-  ;; environments are fresh each time, so deleted declarations disappear too.
   (let [app (try (build/read-edn app-file) (catch Exception _ {}))
-        roots (distinct (concat (build/local-input-roots)
-                                ["src" "resources" "dev" "deps.edn" "package-lock.json"
-                                 "../fast-twitch/src" "../fast-twitch/resources"]
-                                (:paths app)
-                                [(or (.getParent (io/file app-file)) ".")]))]
-    (build/sha (pr-str (for [file (sort-by str (mapcat source-files roots))]
+        parent (or (.getParentFile (io/file app-file)) (io/file "."))
+        files (build/input-files
+                (concat (build/input-roots app app-file)
+                        (map #(io/file parent %) [".dev.vars" ".env" ".env.local"]))
+                (:output app ".celld-build"))]
+    (build/sha (pr-str (for [file files]
                          [(str file) (.lastModified file) (.length file)
                           (when (= (.getCanonicalPath file)
                                    (.getCanonicalPath (io/file app-file)))

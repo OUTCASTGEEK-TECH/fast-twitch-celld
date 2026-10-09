@@ -1,11 +1,14 @@
 (ns fast-twitch.celld.test-main
   "Release-output tests for receiver/omission/guards; native fixtures remain separate."
   (:require
+    [malli.core :as m]
+
     [cljs.core :refer [await]]
     [cljs.test :refer [deftest is run-tests async]]
     [fast-twitch.celld.context :as context]
+    [fast-twitch.celld.worker]
     [fast-twitch.celld.native :as native]
-    [fast-twitch.celld.storage :as storage]
+    [fast-twitch.celld.storage :as storage :refer-macros [with-transaction-sync]]
     [fast-twitch.celld.sql :as sql]
     [fast-twitch.celld.validation :as validation]
     [fast-twitch.celld.storage.kv :as kv]
@@ -24,20 +27,82 @@
     [fast-twitch.celld.http :as http]
     [fast-twitch.util.http.request :as request]
     [fast-twitch.codecs.json :as json])
+  (:require-macros [fast-twitch.celld.macros :refer [defworker]])
   (:refer-global :only
                  [Promise Object Uint8Array process BigInt TextEncoder Response Request
-                  Error Map]))
+                  Error Map globalThis]))
+
+(defn observed-worker-event
+  [ctx event]
+  [ctx event])
+
+(defn worker-owner
+  [ctx]
+  (aget (context/env ctx) "owner"))
+
+(defn native-worker-fetch
+  [ctx _request]
+  (Response. (worker-owner ctx)))
+
+(defworker NamedWorker
+           {:export :NamedWorker
+            :queue observed-worker-event
+            :scheduled observed-worker-event
+            :fetch {:handler native-worker-fetch :native? true}
+            :rpc {:owner {:handler worker-owner :args [:cat] :returns :string}}})
+
+(defworker DefaultWorker
+           {:queue observed-worker-event
+            :scheduled observed-worker-event
+            :fetch {:handler native-worker-fetch :native? true}})
+
+(deftest declared-worker-contexts
+  (async
+    done
+    ((^:async fn
+      []
+      (try
+        (let [env-a #js {:owner "a"}
+              env-b #js {:owner "b"}
+              ctx #js {}
+              event #js {}
+              a (new NamedWorker ctx env-a)
+              b (new NamedWorker ctx env-b)]
+          (doseq [worker [a b]
+                  method ["queue" "scheduled"]]
+            (let [[observed observed-event] (native/invoke worker method [event])]
+              (is (= :named-worker (:kind observed)))
+              (is (identical? (context/of worker) observed))
+              (is (identical? event observed-event))))
+          (doseq [method ["queue" "scheduled"]]
+            (let [[observed observed-event]
+                    (native/invoke DefaultWorker method [event env-b ctx])]
+              (is (= :worker (:kind observed)))
+              (is (identical? env-b (context/env observed)))
+              (is (identical? ctx (context/native observed)))
+              (is (identical? event observed-event))))
+          (is (= "a" (await (native/invoke a "owner" []))))
+          (is (= "b" (await (native/invoke b "owner" []))))
+          (let [request (Request. "https://fixture/")
+                named (await (native/invoke a "fetch" [request]))
+                default (await (native/invoke DefaultWorker "fetch" [request env-b ctx]))]
+            (is (= "a" (await (.text named))))
+            (is (= "b" (await (.text default)))))
+          (is (thrown? Error
+                       (.call (aget (.-prototype NamedWorker) "queue") #js {} event))))
+        (catch :default error (is false (str error)))
+        (finally (done)))))))
 
 (deftest guards-and-codecs
-  (is (contracts/options-valid? :queue-send {:delaySeconds 86400}))
-  (is (not (contracts/options-valid? :queue-send {:delaySeconds 86401})))
+  (is (m/validate (:queue-send contracts/schemas) {:delaySeconds 86400}))
+  (is (not (m/validate (:queue-send contracts/schemas) {:delaySeconds 86401})))
   (is (= {:items [nil false 42]}
          (codec/decode :json (codec/encode :json {:items [nil false 42]}))))
   (is (thrown? js/Error (codec/encode :native {:unsafe "collection"})))
   (is (thrown? js/Error (codec/encode :native 9007199254740992)))
   (is (thrown? js/Error
                (codec/decode :json
-                             #js {:fastTwitchCodec "json" :version 2 :payload "null"}))))
+                             "null"))))
 
 (deftest native-structured-graph
   (let [integer (BigInt "9007199254740993")
@@ -51,16 +116,18 @@
   (is (= 10000 (workflows/duration-ms "10 seconds")))
   (is (= 1000 (workflows/duration-ms "1 second")))
   (is (thrown? Error (workflows/duration-ms "invalid duration")))
-  (is (contracts/options-valid? :workflow-create {:locationHint "apac-ne"}))
-  (is (contracts/options-valid? :workflow-create {:locationHint "apac-se"}))
-  (is (contracts/options-valid? :workflow-retries {:limit 10000 :delay "1 second"}))
-  (is (not (contracts/options-valid? :workflow-retries {:limit 10001 :delay "1 second"})))
-  (is (not (contracts/options-valid? :workflow-step {:sensitive true}))))
+  (is (m/validate (:workflow-create contracts/schemas) {:locationHint :apac-ne}))
+  (is (m/validate (:workflow-create contracts/schemas) {:locationHint :apac-se}))
+  (is (m/validate (:workflow-step contracts/schemas)
+                  {:retries {:limit 10000 :delay "1 second"}}))
+  (is (not (m/validate (:workflow-step contracts/schemas)
+                       {:retries {:limit 10001 :delay "1 second"}})))
+  (is (not (m/validate (:workflow-step contracts/schemas) {:sensitive true}))))
 
 (deftest transport-options-before-effects
   (let [calls (atom 0)]
-    (aset js/globalThis
-          "__ft_connect"
+    (aset (aget globalThis "cloudflare:sockets")
+          "connect"
           (fn [& _]
             (swap! calls inc)))
     (is (thrown?
@@ -78,14 +145,10 @@
               (reset! committed true)
               result)))
     (is (= 7
-           (storage/transaction-sync! receiver
-                                      (fn []
-                                        7))))
+           (with-transaction-sync receiver 7)))
     (reset! committed false)
     (is (thrown? js/Error
-                 (storage/transaction-sync! receiver
-                                            (fn []
-                                              (Promise.resolve 1)))))
+                 (with-transaction-sync receiver (Promise.resolve 1))))
     (is (false? @committed))))
 
 (deftest receiver-and-omission
@@ -128,9 +191,9 @@
               (swap! calls inc))))
     (is (thrown? js/Error (kv/get-value receiver :absent :rpc)))
     (is (thrown? js/Error (kv/list-values receiver {} :rpc)))
-    (is (thrown? js/Error (workflows/create! receiver {} :rpc)))
+    (is (thrown? js/Error (workflows/create! receiver {:codec :rpc})))
     (is (thrown? js/Error
-                 (workflows/wait-for-event! receiver "wait" {:type "event"} :rpc)))
+                 (workflows/wait-for-event! receiver :wait {:type :event :codec :rpc})))
     (is (zero? @calls))))
 
 (deftest default-persistence-policy
@@ -158,17 +221,22 @@
     (is (= 1 @calls))))
 
 (deftest unavailable-workflow-sensitive-before-effects
-  (let [calls (atom 0)
-        receiver #js {:do (fn [& _]
-                            (swap! calls inc))}]
-    (try (workflows/do! receiver
-                        "step"
-                        {:sensitive "output"}
-                        (fn []
-                          nil))
-         (is false "Unavailable native option must reject")
-         (catch :default error (is (= :unavailable (:boundary (ex-data error))))))
-    (is (zero? @calls))))
+  (async done
+         ((^:async fn
+           []
+           (let [calls (atom 0)
+                 receiver #js {:do (fn [& _]
+                                     (swap! calls inc))}]
+             (try (await (workflows/do! receiver
+                                        :step
+                                        (fn []
+                                          nil)
+                                        {:sensitive "output"}))
+                  (is false "Unavailable native option must reject")
+                  (catch :default error
+                    (is (= :unavailable (:boundary (ex-data error))))))
+             (is (zero? @calls)))
+           (done)))))
 
 (deftest native-projection-and-proxy-call
   (let [object #js {:key "key"
@@ -210,36 +278,94 @@
                  (queues/send-batch! receiver [{:body "body" :delaySeconds 86401}])))
     (is (thrown? js/Error (containers/connect! receiver {} {:codec :wrong})))
     (is (zero? @calls))
+    (let [payload {:tenant/value 1}
+          seen (atom nil)
+          pending (Promise.resolve nil)]
+      (aset receiver
+            "send"
+            (fn [body options]
+              (reset! seen [body options])
+              pending))
+      (is (identical? pending
+                      (queues/send! receiver payload {:codec :json :contentType :json})))
+      (is (= payload (codec/decode :json (first @seen))))
+      (is (undefined? (aget (second @seen) "codec")))
+      (is (thrown? Error
+                   (queues/send-batch! receiver
+                                       [{:body payload :codec :json} {:body payload}])))
+      (is (zero? @calls)))
     (let [bytes (Uint8Array. #js [1 2])
-          code (loaders/code {:mainModule "module"
+          native-module #js {:data bytes}
+          code (loaders/code {:mainModule :tenant/module
                               :compatibilityDate "2026-10-07"
-                              :modules {:module {:wasm bytes}}})]
-      (is (identical? bytes (aget (aget (aget code "modules") "module") "wasm"))))))
+                              :compatibilityFlags [:js_rpc]
+                              :modules {:tenant/module {:wasm bytes}
+                                        :native native-module}})]
+      (is (= "tenant/module" (aget code "mainModule")))
+      (is (= ["js_rpc"] (vec (aget code "compatibilityFlags"))))
+      (is (identical? bytes (aget (aget (aget code "modules") "tenant/module") "wasm")))
+      (is (identical? native-module (aget (aget code "modules") "native"))))))
 
 (deftest workflow-map-and-absent-output
-  (async done
-         ((^:async fn
-           []
-           (let [instance #js {:status (fn []
-                                         (Promise.resolve #js {:status :waiting}))}
-                 payload {:value 3}
-                 event #js {:payload (codec/encode :json payload) :instanceId "id"}
-                 seen (atom nil)]
-             (is (= {:status :waiting} (await (workflows/status! instance :json))))
-             (is (= payload
-                    (codec/decode :json
-                                  (await (workflows/run! (fn [_ event _]
-                                                           (reset! seen event)
-                                                           (req! event :payload))
-                                                         {}
-                                                         event
-                                                         #js {}
-                                                         {:codec :json
-                                                          :args [:map-of :keyword :int]
-                                                          :returns [:map-of :keyword
-                                                                    :int]})))))
-             (is (= "id" (get @seen :instanceId)))
-             (done))))))
+  (async
+    done
+    ((^:async fn
+      []
+      (let [instance #js {:status (fn []
+                                    (Promise.resolve #js {:status :waiting}))}
+            payload {:value 3}
+            event #js {:payload (codec/encode :json payload) :instanceId "id"}
+            seen (atom nil)]
+        (is (= {:status :waiting} (await (workflows/status! instance :json))))
+        (is (= payload
+               (codec/decode :json
+                             (await (workflows/run! (fn [_ event _]
+                                                      (reset! seen event)
+                                                      (req! event :payload))
+                                                    {}
+                                                    event
+                                                    #js {}
+                                                    {:codec :json
+                                                     :args [:map-of :keyword :int]
+                                                     :returns [:map-of :keyword
+                                                               :int]})))))
+        (is (= "id" (get @seen :instanceId)))
+        (let [calls (atom 0)
+              binding #js {:createBatch (fn [options]
+                                          (swap! calls inc)
+                                          (Promise.resolve options))}
+              step #js {:do (fn [name options callback]
+                              (is (= "project" name))
+                              (is (undefined? (aget options "codec")))
+                              (callback #js {:attempt 1}))
+                        :waitForEvent (fn [_ options]
+                                        (is (= "continue" (aget options "type")))
+                                        (is (undefined? (aget options "codec")))
+                                        (Promise.resolve
+                                          #js {:type "continue"
+                                               :payload (codec/encode :json payload)}))}]
+          (is (= payload
+                 (await (workflows/do! step
+                                       :project
+                                       (fn [ctx]
+                                         (is (= 1 (.-attempt ctx)))
+                                         (Promise.resolve payload))
+                                       {:codec :json}))))
+          (is (= {:type :continue :payload payload}
+                 (await (workflows/wait-for-event! step
+                                                   :event
+                                                   {:type :continue :codec :json}))))
+          (is (thrown? Error
+                       (workflows/create-batch! binding
+                                                [{:params payload :codec :json}
+                                                 {:params payload}])))
+          (is (zero? @calls))
+          (let [batch (await (workflows/create-batch! binding
+                                                      [{:params payload :codec :json}]))]
+            (is (= payload (codec/decode :json (aget (aget batch 0) "params"))))
+            (is (undefined? (aget (aget batch 0) "codec")))
+            (is (= 1 @calls))))
+        (done))))))
 
 (deftest keyword-wire-budget-and-before-effects
   (let [value {:user/id :tenant/customer
@@ -253,13 +379,12 @@
         receiver #js {:put (fn [& _]
                              (swap! calls inc))}]
     (is (= value (codec/decode :json (codec/encode :json value))))
-    (is (= 2 (aget (codec/encode :json value) "version")))
-    (is (= {:legacy false}
-           (codec/decode
-             :json
-             #js {:fastTwitchCodec "json"
-                  :version 1
-                  :payload (json/encode {:legacy false})})))
+    (is (string? (codec/encode :json value)))
+    (is (= 2 (nth (json/decode (codec/encode :json value)) 1)))
+    (is (thrown? Error
+                 (codec/decode
+                   :json
+                   (json/encode ["fast-twitch/cljs-json" 1 false]))))
     (is (= 1048576 (.-byteLength (.encode encoder (codec/write-json exact)))))
     (is (= exact (codec/read-json (codec/write-json exact))))
     (is (= unicode (codec/read-json (codec/write-json unicode))))
@@ -274,7 +399,7 @@
     (is (thrown? Error
                  (codec/decode
                    :json
-                   #js {:fastTwitchCodec "json" :version 3 :payload "null"})))))
+                   (json/encode ["fast-twitch/cljs-json" 3 nil]))))))
 
 (deftest closed-rpc-options-and-safe-diagnostics
   (async done
@@ -386,6 +511,9 @@
       (let [saved (atom nil)
             receiver #js {:put (fn [_ _ options]
                                  (reset! saved (aget options "metadata")))
+                          :list (fn []
+                                  #js {:keys #js [#js {:name "first" :metadata @saved}]
+                                       :list_complete true})
                           :getWithMetadata
                             (fn [keys]
                               (let [record #js {:value "value" :metadata @saved}]
@@ -407,6 +535,16 @@
                (:metadata (get (await (service-kv/get-with-metadata! receiver
                                                                      [:first :second]))
                                :first))))
+        (is (= {:tenant/kind :record/customer}
+               (:metadata (first (:keys (await (service-kv/list! receiver)))))))
+        (doseq [external ["external opaque metadata" false]]
+          (reset! saved external)
+          (is (= external
+                 (:metadata (await (service-kv/get-with-metadata! receiver :first))))))
+        (reset! saved (json/encode ["fast-twitch/cljs-json" 3 nil]))
+        (try (await (service-kv/get-with-metadata! receiver :first))
+             (is false "Malformed owned metadata must reject")
+             (catch :default _ (is true)))
         (done))))))
 
 (deftest honeysql-named-parameters-and-keyword-rows
@@ -450,7 +588,32 @@
     (let [row #js {}]
       (aset row (names/identifier :user/id) 7)
       (aset row (names/identifier :tenant/id) 9)
-      (is (= {:user/id 7 :tenant/id 9} (sql/row-map row))))))
+      (is (= {:user/id 7 :tenant/id 9} (sql/row-map row))))
+    (let [read (atom 0)
+          cursor (fn []
+                   #js {:next (fn []
+                                (let [index (swap! read inc)]
+                                  (if (> index 3)
+                                    #js {:done true}
+                                    #js {:done false :value #js {:id index}})))})
+          failure (Error. "primary")]
+      (is (thrown? Error (sql/all-rows (cursor) 1)))
+      (is (= 4 @read))
+      (reset! read 0)
+      (is (= {:id 1}
+             (sql/reduce-rows (cursor)
+                              (fn [_ row]
+                                (reduced row))
+                              nil)))
+      (is (= 4 @read))
+      (reset! read 0)
+      (try (sql/reduce-rows (cursor)
+                            (fn [& _]
+                              (throw failure))
+                            nil)
+           (is false)
+           (catch :default error (is (identical? failure error))))
+      (is (= 4 @read)))))
 
 (deftest keyword-kv-preflight-and-full-namespace
   (let [calls (atom 0)
@@ -524,6 +687,37 @@
                (catch :default error (is (some? error)))))
         (is (zero? @calls)))
       (done)))))
+
+(deftest optional-native-arguments
+  (let [seen (atom [])
+        pending (Promise.resolve nil)
+        receiver #js {}]
+    (doseq [method ["sendBatch" "start" "exec" "kill" "destroy"]]
+      (aset receiver
+            method
+            (fn []
+              (swap! seen conj [method (js* "arguments.length")])
+              pending)))
+    (is (identical? pending (queues/send-batch! receiver [{:body 1}])))
+    (containers/start! receiver)
+    (containers/start! receiver {})
+    (containers/exec! receiver ["echo"])
+    (containers/exec! receiver ["echo"] {})
+    (containers/kill! receiver)
+    (containers/kill! receiver 9)
+    (containers/destroy! receiver)
+    (containers/destroy! receiver nil)
+    (is (= [["sendBatch" 1] ["start" 0] ["start" 1] ["exec" 1] ["exec" 2] ["kill" 0]
+            ["kill" 1] ["destroy" 0] ["destroy" 1]]
+           @seen))
+    (doseq [invoke [#(queues/send-batch! receiver [{:body 1}] {} {})
+                    #(containers/start! receiver nil)
+                    #(containers/exec! receiver ["echo"] {:stdout :invalid})
+                    #(containers/kill! receiver nil)
+                    #(containers/destroy! receiver nil nil)
+                    #(r2/create-multipart! receiver :object {:storageClass "Standard"})]]
+      (is (thrown? js/Error (invoke))))
+    (is (= 9 (count @seen)))))
 
 (deftest r2-keyword-selectors-and-invalid-options-before-effects
   (async done

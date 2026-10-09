@@ -1,7 +1,9 @@
 (ns fast-twitch.celld.services.kv
   "Service KV modes, metadata and bulk read conversion. A JSON null and missing
   JSON value are indistinguishable in native get; metadata does not prove presence."
-  (:require [cljs.core :refer [await]]
+  (:require [fast-twitch.celld.contracts :as contracts]
+            [malli.experimental :as mx]
+            [cljs.core :refer [await]]
             [fast-twitch.celld.native :as n]
             [fast-twitch.celld.validation :as v]
             [fast-twitch.celld.codec :as codec]
@@ -14,10 +16,11 @@
   [binding]
   binding)
 
-(defn- key!
-  [value]
+(mx/defn ^{:dynamic true :private true} key!
+  :-
+  [:string {:min 1}]
+  [value :- :keyword]
   (let [value (n/key-name value :service-kv-key)]
-    (v/check! [:string {:min 1}] value :service-kv-key)
     (when (or (#{"." ".."} value) (> (.-byteLength (.encode (TextEncoder.) value)) 512))
       (v/fail! :service-kv-key
                :value
@@ -35,45 +38,44 @@
              "Use a native string, byte buffer or ReadableStream."))
   value)
 
-(defn- keys-native
-  [value]
+(mx/defn ^{:dynamic true :private true} keys-native
+  [value :- [:or :keyword [:vector {:max 100} :keyword]]]
   (if (vector? value)
     (to-array
-      (mapv key!
-        (v/check! [:vector {:max 100} :keyword] value :service-kv-bulk)))
+      (mapv key! value))
     (key! value)))
+
+(def ^:private ReadOptions
+  [:maybe
+   [:or [:enum :text :json :arrayBuffer :stream] (:service-kv-read contracts/schemas)]])
 
 (defn- read-options
   [options]
-  (if (or (keyword? options) (string? options))
-    (v/check! [:enum "text" "json" "arrayBuffer" "stream"]
-              (names/text options)
-              :service-kv-mode)
-    (n/options options #{:type} :service-kv-read)))
+  [(when options (if (keyword? options) (names/text options) (n/option-fields options)))
+   (if (= :json (if (keyword? options) options (:type options)))
+     json/decode-native
+     identity)])
 
-(defn- read-result
-  ([key result]
-   (read-result key result false))
-  ([key result json?]
-   (if (vector? key)
-     (reduce (fn [out entry]
-               (assoc out
-                 (keyword (aget entry 0))
-                   (if json? (json/decode-native (aget entry 1)) (aget entry 1))))
-       {}
-       (array-seq (Array.from result)))
-     (if json? (json/decode-native result) result))))
+(defn- project-result
+  [key result project]
+  (if (vector? key)
+    (reduce (fn [out entry]
+              (assoc out
+                (keyword (aget entry 0))
+                  (project (aget entry 1))))
+      {}
+      (array-seq (Array.from result)))
+    (project result)))
 
-(defn ^:async get!
-  "Returns native text/JSON/bytes/stream or nil. Bulk maps retain the caller’s key identities and preserve null holes.
+(mx/defn ^{:dynamic true :async true} get!
+  "Returns native text/JSON/bytes/stream or nil. Bulk maps retain keyword keys and null holes.
   JSON mode projects received fields to keywords; lossless CLJS decoding uses get-json!."
-  ([binding key]
-   (read-result key (await (n/invoke binding "get" [(keys-native key)]))))
-  ([binding key options]
-   (read-result key
-                (await
-                  (n/invoke binding "get" [(keys-native key) (read-options options)]))
-                (#{:json "json"} (if (map? options) (:type options) options)))))
+  [binding key & [options] :- [:? ReadOptions]]
+  (let [[native project] (read-options options)]
+    (project-result
+      key
+      (await (n/invoke binding "get" (cond-> [(keys-native key)] native (conj native))))
+      project)))
 
 (defn- metadata-map
   [record]
@@ -81,50 +83,39 @@
         metadata (:metadata record)]
     (cond-> record
       (some? metadata) (update :metadata
-                               #(if (= "json" (aget % "fastTwitchCodec"))
+                               #(if (and (string? %)
+                                         (re-find #"^\s*\[\s*\"fast-twitch/cljs-json\""
+                                                  %))
                                   (codec/decode :json %)
                                   (json/decode-native %))))))
 
-(defn- metadata-result
-  ([key result]
-   (metadata-result key result false))
-  ([key result json?]
-   (let [project (fn [value]
-                   (cond-> (metadata-map value)
-                     json? (update :value json/decode-native)))]
-     (if (vector? key)
-       (into {}
-             (map (fn [[key value]] [key (project value)])
-               (read-result key result)))
-       (project result)))))
-
-(defn ^:async get-with-metadata!
+(mx/defn ^{:dynamic true :async true} get-with-metadata!
   "Returns value/metadata/cacheStatus data, retaining native streamed values."
-  ([binding key]
-   (metadata-result key (await (n/invoke binding "getWithMetadata" [(keys-native key)]))))
-  ([binding key options]
-   (let [result (await (n/invoke binding
-                                 "getWithMetadata"
-                                 [(keys-native key) (read-options options)]))]
-     (metadata-result key
-                      result
-                      (#{:json "json"} (if (map? options) (:type options) options))))))
+  [binding key & [options] :- [:? ReadOptions]]
+  (let [[native project] (read-options options)]
+    (project-result key
+                    (await (n/invoke binding
+                                     "getWithMetadata"
+                                     (cond-> [(keys-native key)] native (conj native))))
+                    (fn [record]
+                      (let [record (metadata-map record)]
+                        (cond-> record
+                          (contains? record :value) (update :value project)))))))
 
-(defn put!
-  "Writes string/native bytes/stream, preserving stream ownership. Expiration units are seconds.
-  CLJS metadata uses the lossless versioned JSON codec; native metadata stays native.
-  Resources and oversized encoded metadata reject before invoking put."
-  ([binding key value]
-   (n/invoke binding "put" [(key! key) (body! value)]))
-  ([binding key value options]
-   (let [metadata (:metadata options)
-         options (cond-> options
-                   (or (coll? metadata) (keyword? metadata))
-                     (update :metadata #(codec/encode :json %)))
-         native-options
-           (n/options options #{:expiration :expirationTtl :metadata} :service-kv-put)]
-     (when (contains? options :metadata) (codec/native-value! (:metadata options)))
-     (n/invoke binding "put" [(key! key) (body! value) native-options]))))
+(mx/defn ^:dynamic put!
+  "Writes string/native bytes/stream, preserving ownership. Expiration units are seconds.
+  CLJS metadata uses versioned JSON; native metadata stays native. All values are checked before put."
+  [binding key value & [options :as supplied] :- [:? (:service-kv-put contracts/schemas)]]
+  (let [options (cond-> options
+                  (contains? options :metadata)
+                    (update :metadata
+                            #(if (or (coll? %) (keyword? %))
+                               (codec/encode :json %)
+                               (codec/native-value! %))))]
+    (n/invoke binding
+              "put"
+              (cond-> [(key! key) (body! value)]
+                supplied (conj (n/option-fields options))))))
 
 (defn put-json!
   "Explicitly serializes supported CLJS JSON to text before writing."
@@ -141,19 +132,14 @@
   [binding key]
   (n/invoke binding "delete" [(key! key)]))
 
-(defn ^:async list!
+(mx/defn ^{:async true :dynamic true} list!
   "Returns keyword metadata records and an opaque native continuation cursor."
-  ([binding]
-   (list! binding nil))
-  ([binding options]
-   (let [result (await (n/invoke binding
-                                 "list"
-                                 (if options
-                                   [(n/options options
-                                               #{:prefix :cursor :limit}
-                                               :service-kv-list)]
-                                   [])))]
-     {:keys (mapv #(update (metadata-map %) :name keyword)
-              (array-seq (aget result "keys")))
-      :list-complete? (aget result "list_complete")
-      :cursor (aget result "cursor")})))
+  [binding & [options] :- [:? [:maybe (:service-kv-list contracts/schemas)]]]
+  (let [result (await
+                 (n/invoke binding "list" (if options [(n/option-fields options)] [])))]
+    {:keys (mapv #(update (metadata-map %) :name keyword)
+             (array-seq (aget result "keys")))
+     :list-complete? (aget result "list_complete")
+     :cursor (aget result "cursor")}))
+
+(v/instrument! key! keys-native get! get-with-metadata! put! list!)

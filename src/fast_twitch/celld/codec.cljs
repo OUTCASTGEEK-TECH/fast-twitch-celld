@@ -1,6 +1,7 @@
 (ns fast-twitch.celld.codec
   "Explicit versioned payload policy over Fast-Twitch JSON; native resources stay native."
-  (:require [fast-twitch.codecs.json :as json]
+  (:require [malli.experimental :as mx]
+            [fast-twitch.codecs.json :as json]
             [fast-twitch.celld.validation :as v]
             [fast-twitch.celld.names :as names])
   (:require-macros [fast-twitch.celld.contracts :refer [payload-limit]])
@@ -69,10 +70,9 @@
 (def ^:private max-payload-bytes
   (payload-limit))
 
-(defn- json-size!
+(mx/defn ^{:dynamic true :private true} json-size!
   "Counts exact UTF-8 bytes of the encoded JSON payload, including version/tag data."
-  [text]
-  (v/check! :string text :json-payload)
+  [text :- :string]
   (when (> (.-byteLength (.encode (TextEncoder.) text)) max-payload-bytes)
     (v/fail! :json-payload :limit
              "Reduce the encoded UTF-8 JSON payload to the target budget."
@@ -145,13 +145,17 @@
   [value]
   (json-size! (json/encode ["fast-twitch/cljs-json" 2 (json-data value 0)])))
 
+(defn- versioned-data
+  [value]
+  (v/check! [:tuple [:= "fast-twitch/cljs-json"] [:= 2] :any] value :json-version)
+  (cljs-data (nth value 2) 0))
+
 (defn read-json
-  "Reads version-2 CLJS JSON text; legacy JSON projects received object keys to keywords."
+  "Reads version-2 CLJS JSON text or interoperable plain JSON."
   [text]
   (let [value (read-wire text)]
     (if (and (vector? value) (= "fast-twitch/cljs-json" (first value)))
-      (do (v/check! [:tuple [:= "fast-twitch/cljs-json"] [:= 2] :any] value :json-version)
-          (cljs-data (nth value 2) 0))
+      (versioned-data value)
       value)))
 
 (defn encode
@@ -160,29 +164,21 @@
   (case (or policy :native)
     :native (native-value! value)
     :rpc (rpc-value! value)
-    :json #js {:fastTwitchCodec "json" :version 2 :payload (write-json value)}
+    :json (write-json value)
     (v/fail! :encode :codec "Choose an operation-supported explicit codec.")))
 
 (defn decode
-  "Decodes a checked native value or versioned JSON envelope, retaining legacy v1 reads."
+  "Decodes checked native data or strict version-2 JSON text."
   [policy value]
   (case (or policy :native)
     :native (native-value! value)
     :rpc (rpc-value! value)
-    :json (do (when-not (and (some? value)
-                             (= "json" (aget value "fastTwitchCodec"))
-                             (#{1 2} (aget value "version")))
-                (v/fail! :decode :codec "Supply a supported versioned JSON envelope."))
-              (if (= 1 (aget value "version"))
-                (read-wire (aget value "payload"))
-                (let [payload (read-wire (aget value "payload"))]
-                  (v/check! [:tuple [:= "fast-twitch/cljs-json"] [:= 2] :any]
-                            payload
-                            :json-version)
-                  (cljs-data (nth payload 2) 0))))
+    :json (versioned-data (read-wire value))
     (v/fail! :decode :codec "Choose an operation-supported explicit codec.")))
 
-(defn persistence-policy!
+(mx/defn ^:dynamic persistence-policy!
   "Checks a data-only policy before persistent reads or effects; RPC capabilities cannot be persisted."
-  [policy]
-  (v/check! [:maybe [:enum :native :json]] policy :persistence-codec))
+  [policy :- [:maybe [:enum :native :json]]]
+  policy)
+
+(v/instrument! json-size! persistence-policy!)

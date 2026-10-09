@@ -1,6 +1,8 @@
 (ns fast-twitch.celld.alarms
   "One native alarm per Cell; times are absolute milliseconds. No scheduler is installed."
-  (:require [fast-twitch.celld.native :as n] [fast-twitch.celld.validation :as v])
+  (:require [malli.experimental :as mx]
+            [fast-twitch.celld.native :as n]
+            [fast-twitch.celld.validation :as v])
   (:refer-global :only [Date]))
 
 (defn set-at!
@@ -11,10 +13,9 @@
     (v/safe-number! ms :alarm-time)
     (n/invoke storage "setAlarm" [ms])))
 
-(defn set-after!
+(mx/defn ^:dynamic set-after!
   "Schedules after a positive duration in milliseconds, explicitly."
-  [storage duration-ms]
-  (v/check! [:int {:min 1}] duration-ms :alarm-duration)
+  [storage duration-ms :- [:int {:min 1}]]
   (set-at! storage (+ (Date.now) duration-ms)))
 
 (defn get-time!
@@ -26,3 +27,5 @@
   "Returns the native deleteAlarm Promise; removes the one Cell alarm."
   [storage]
   (n/invoke storage "deleteAlarm" []))
+
+(v/instrument! set-after!)

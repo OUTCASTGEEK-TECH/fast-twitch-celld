@@ -1,4 +1,4 @@
-{:name "direct-cell"
+{:name :direct-cell
  :entry example.app
  :paths ["examples/01-direct-cell/src"]
  :output "examples/01-direct-cell/.celld-build"

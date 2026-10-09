@@ -1,4 +1,4 @@
-{:name "compiled-loaded"
+{:name :compiled-loaded
  :entry example.loaded
  :paths ["examples/05-workflows-loaders-and-facets/loaded/src"]
  :output "examples/05-workflows-loaders-and-facets/loaded/.celld-build"

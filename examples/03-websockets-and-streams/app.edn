@@ -1,4 +1,4 @@
-{:name "transport-checks"
+{:name :transport-checks
  :entry example.transport-app
  :paths ["examples/03-websockets-and-streams/src"]
  :output "examples/03-websockets-and-streams/.celld-build"

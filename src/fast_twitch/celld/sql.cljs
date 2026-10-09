@@ -1,8 +1,8 @@
 (ns fast-twitch.celld.sql
   "Synchronous Cell SQL, explicit bindings and fully drained write cursors.
   HoneySQL formats SQL only; it does not execute or own application migrations."
-  (:require [honey.sql :as honey]
-            [clojure.walk :as walk]
+  (:require [malli.experimental :as mx]
+            [honey.sql :as honey]
             [fast-twitch.celld.names :as names]
             [fast-twitch.celld.native :as n]
             [fast-twitch.celld.validation :as v])
@@ -26,78 +26,76 @@
              "Supply null, a string, finite safe number, or native bytes."))
   (v/safe-number! value :sql-binding))
 
-(defn- named-data!
-  "Authored bound values live in the parameter map. HoneySQL owns collection
-  expansion; inline constants and DDL type/default data retain HoneySQL semantics."
-  [form ddl?]
+(defn- result-columns
+  [columns]
+  (let [columns (mapv (fn [column]
+                        (if (= :* column)
+                          column
+                          (let [[expression alias]
+                                  (if (keyword? column) [column column] column)]
+                            (v/check! :keyword alias :sql-result-alias)
+                            [expression (keyword (names/identifier alias))])))
+                  columns)
+        aliases (map second (remove #{:*} columns))]
+    (when-not (= (count aliases) (count (distinct aliases)))
+      (v/fail! :sql-query :collision "Use distinct keyword result aliases."))
+    columns))
+
+(defn- prepare
+  "One traversal checks authored values/raw escapes/params and projects result aliases."
+  [form context]
   (cond
-    (map? form) (doseq [[clause value] form]
-                  (named-data! value (or ddl? (= :with-columns clause))))
-    (sequential? form) (when-not (#{:param :inline :default} (first form))
-                         (doseq [value form] (named-data! value ddl?)))
-    (or (string? form) (and (number? form) (not ddl?)))
+    (#{:raw 'raw} form)
+      (v/fail! :sql-query
+               :authoring
+               "Use HoneySQL clauses and parameters without raw SQL escapes.")
+    (map? form)
+      (reduce-kv
+        (fn [out clause value]
+          (let [clause (prepare clause context)
+                value (prepare value
+                               (if (and (= :with-columns clause) (not= :literal context))
+                                 :ddl
+                                 context))]
+            (assoc out
+              clause (if (and value (#{:select :select-distinct :returning} clause))
+                       (result-columns value)
+                       value))))
+        {}
+        form)
+    (sequential? form)
+      (do
+        (when (= :param (first form))
+          (v/check! [:tuple [:= :param] :keyword] form :sql-parameter))
+        (let [context (if (#{:param :inline :default} (first form)) :literal context)
+              values (map #(prepare % context) form)]
+          (if (vector? form) (vec values) (doall values))))
+    (set? form) (into #{} (map #(prepare % :literal) form))
+    (and (not= :literal context)
+         (or (string? form) (and (number? form) (not= :ddl context))))
       (v/fail!
         :sql-query
         :parameters
-        "Use keyword named parameters for values, and HoneySQL :inline for SQL constants.")))
-
-(defn- result-identities
-  "Projects result aliases, not qualified table references, to reversible native names."
-  [query]
-  (walk/postwalk
-    (fn [form]
-      (if (map? form)
-        (reduce (fn [out clause]
-                  (if-let [columns (get out clause)]
-                    (let [aliases (atom #{})
-                          columns
-                            (mapv
-                              (fn [column]
-                                (if (= :* column)
-                                  column
-                                  (let [[expression alias]
-                                          (if (keyword? column) [column column] column)]
-                                    (v/check! :keyword alias :sql-result-alias)
-                                    (when (@aliases alias)
-                                      (v/fail! :sql-query
-                                               :collision
-                                               "Use distinct keyword result aliases."))
-                                    (swap! aliases conj alias)
-                                    [expression (keyword (names/identifier alias))])))
-                              columns)]
-                      (assoc out clause columns))
-                    out))
-          form
-          [:select :select-distinct :returning])
-        form))
-    query))
+        "Use keyword named parameters for values, and HoneySQL :inline for SQL constants.")
+    :else form))
 
 (defn ^:no-doc row-map
   "Internal native row projection; reversible aliases retain keyword namespaces."
   [row]
   (n/data-map row names/selector))
 
-(defn ^:no-doc formatted
+(mx/defn ^{:dynamic true :no-doc true} formatted
   "Internal HoneySQL boundary. Public queries are keyword clause maps; raw escapes
   are rejected. Only HoneySQL emits the native SQL text; params are application data."
-  ([query]
+  ([query :- [:map-of :keyword :any]]
    (formatted query {}))
-  ([query params]
-   (v/check! [:map-of :keyword :any] query :sql-query)
-   (v/check! [:map-of :keyword :any] params :sql-params)
-   (doseq [node (tree-seq coll? seq query)
-           :when (and (sequential? node) (= :param (first node)))]
-     (v/check! [:tuple [:= :param] :keyword] node :sql-parameter))
-   (when (or (empty? query)
-             (some #{:raw 'raw} (tree-seq coll? seq query)))
+  ([query :- [:map-of :keyword :any] params :- [:map-of :keyword :any]]
+   (when (empty? query)
      (v/fail! :sql-query
               :authoring
               "Use HoneySQL clauses and parameters without raw SQL escapes."))
-   (named-data! query false)
    (try
-     (let [query (result-identities query)
-           formatted (honey/format query {:params params :dialect :ansi :quoted true})]
-       formatted)
+     (honey/format (prepare query :query) {:params params :dialect :ansi :quoted true})
      (catch :default error
        (if (:code (ex-data error))
          (throw error)
@@ -173,24 +171,20 @@
                             (throw error))))]
           (recur next (or stopped? (reduced? next))))))))
 
-(defn all-rows
+(mx/defn ^:dynamic all-rows
   "Collects at most limit rows, drains any excess before reporting a cardinality error.
   Prefer a HoneySQL :limit for large queries; draining is required for write cursors."
   ([cursor]
    (all-rows cursor 10000))
-  ([cursor limit]
-   (v/check! [:int {:min 0}] limit :sql-limit)
-   (loop [rows []
-          overflow? false]
-     (let [result (next-row cursor)]
-       (if (:done? result)
-         (if overflow?
-           (v/fail! :sql-all
-                    :cardinality
-                    "Add a HoneySQL :limit or increase the explicit row bound.")
-           rows)
-         (recur (if (< (count rows) limit) (conj rows (req! result :row)) rows)
-                (or overflow? (>= (count rows) limit))))))))
+  ([cursor limit :- [:int {:min 0}]]
+   (reduce-rows cursor
+                (fn [rows row]
+                  (when (= (count rows) limit)
+                    (v/fail! :sql-all
+                             :cardinality
+                             "Add a HoneySQL :limit or increase the explicit row bound."))
+                  (conj rows row))
+                [])))
 
 (defn zero-or-one
   "Drains the cursor and returns nil or one row; excess rows fail after drain."
@@ -210,3 +204,5 @@
   [cursor]
   (drain-remaining! cursor)
   (metadata cursor))
+
+(v/instrument! formatted all-rows)

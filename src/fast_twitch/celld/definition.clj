@@ -1,5 +1,5 @@
 (ns fast-twitch.celld.definition
-  "Portable declaration rules shared by macros, application builds and tooling."
+  "JVM declaration rules shared by macros, application builds and tooling."
   (:require [malli.core :as m]
             [fast-twitch.celld.contracts :as contracts]
             [fast-twitch.celld.names :as names]))
@@ -13,14 +13,6 @@
 
 (def cell-events
   #{"fetch" "alarm" "webSocketMessage" "webSocketClose" "webSocketError"})
-
-(def kinds
-  #{:cell :init :fetch :rpc :alarm :websocket :worker :queue :scheduled :workflow})
-
-(def declaration-keys
-  (into {}
-        (map (fn [[kind schema]] [kind (set (map first (drop 2 schema)))])
-          contracts/declarations)))
 
 (defn fail!
   "Throws a bounded, source-aware diagnostic. Payloads are never included."
@@ -42,20 +34,21 @@
 (defn check!
   "Checks immutable static schemas during macro expansion/build without running application code."
   [schema value source declaration path]
-  (when-let [issue (contracts/issue schema value)]
-    (fail! (cond
-             (= :malli.core/extra-key (:type issue)) :unknown-key
-             (some #{:codec} (:path issue)) :codec
-             (= :binding (first (:path issue))) :binding
-             (= :export (first (:path issue))) :native-name
-             (#{:version :mode :id} (first (:path issue))) :websocket-dispatch
-             :else :option-value)
-           source
-           declaration
-           (into path (:path issue))
-           (:expected issue)
-           value
-           "Use literal values matching the documented static option contract."))
+  (when-not ((contracts/validator schema) value)
+    (let [issue (contracts/issue schema value)]
+      (fail! (cond
+               (= :malli.core/extra-key (:type issue)) :unknown-key
+               (some #{:codec} (:path issue)) :codec
+               (= :binding (first (:path issue))) :binding
+               (= :export (first (:path issue))) :native-name
+               (#{:version :mode :id} (first (:path issue))) :websocket-dispatch
+               :else :option-value)
+             source
+             declaration
+             (into path (:path issue))
+             (:expected issue)
+             value
+             "Use literal values matching the documented static option contract.")))
   value)
 
 (defn closed!
@@ -85,8 +78,7 @@
   "Compiles a portable literal schema now, rather than postponing errors to calls."
   [schema source declaration path]
   (try (m/schema schema)
-       (catch #?(:clj Exception
-                 :cljs :default)
+       (catch Exception
          _
          (fail! :schema
                 source

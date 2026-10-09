@@ -69,8 +69,12 @@
         (let [before (t/sha256 pointer)]
           (t/write-edn! file (dependency-data "missing-version" extra-alias))
           (wait! #(str/includes? (status) ":stale") "dependency-failure-stale")
-          (t/ensure! (and (= "B2" (response)) (= before (t/sha256 pointer)))
-                     "Dependency failure changed the running generation"))
+          (let [body (response)
+                after (t/sha256 pointer)]
+            (t/ensure! (and (= "B2" body) (= before after))
+                       (str
+                         "Dependency failure changed the running generation: "
+                         {:response body :pointer-before before :pointer-after after}))))
         (t/write-edn! file (dependency-data "version-b" extra-alias))
         (wait! #(and (= "B2" (response)) (str/includes? (status) ":current"))
                "dependency-recovery")

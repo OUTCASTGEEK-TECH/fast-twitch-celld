@@ -89,7 +89,7 @@
   :code "option-value"}
  {:fixture "obvious-sync-await"
   :source
-    "(defn bad [s] (with-transaction-sync s (cljs.core/await nil))) (defcell Good {:binding :GOOD})\n"
+    "(ns fixture.invalid (:require [fast-twitch.celld.storage :refer-macros [with-transaction-sync]]) (:require-macros [fast-twitch.celld.macros :refer [defcell]])) (defn bad [s] (with-transaction-sync s (cljs.core/await nil))) (defcell Good {:binding :GOOD})\n"
   :extra ""
   :code "async-sync"}
  {:fixture "unknown-config"
@@ -107,7 +107,7 @@
  {:fixture "unsupported-advanced"
   :source "(defcell Good {:binding :GOOD})\n"
   :extra ":optimizations :advanced"
-  :code "optimization"}
+  :code "option-value"}
  {:fixture "history-unadopted"
   :source "(defcell New {:binding :NEW})"
   :extra ""

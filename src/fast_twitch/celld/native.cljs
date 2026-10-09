@@ -1,7 +1,7 @@
 (ns fast-twitch.celld.native
   "Receiver-preserving interop. Optional arguments are omitted by wrapper arity."
-  (:require [fast-twitch.celld.validation :as v]
-            [fast-twitch.celld.contracts :as contracts]
+  (:require [malli.experimental :as mx]
+            [fast-twitch.celld.validation :as v]
             [fast-twitch.celld.names :as names])
   (:refer-global :only [Object Reflect]))
 
@@ -16,15 +16,14 @@
   (when (nil? receiver) (v/fail! member :capability "Supply a native handle."))
   (aget receiver (names/text member)))
 
-(defn ^:no-doc key-name
+(mx/defn ^{:dynamic true :no-doc true} key-name
   "Internal projection for keyword KV keys; full namespace spelling is native text."
-  [key operation]
-  (names/text (v/check! :keyword key operation)))
+  [key :- :keyword _operation]
+  (names/text key))
 
-(defn fields
+(mx/defn ^:dynamic fields
   "Projects keyword field names losslessly; rejects native-key collisions and preserves values/handles."
-  [value]
-  (v/check! [:map-of :keyword :any] value :native-field)
+  [value :- [:map-of :keyword :any]]
   (let [out (Object.create nil)]
     (doseq [[key item] value]
       (let [key (names/text key)]
@@ -34,23 +33,20 @@
         (aset out key item)))
     out))
 
-(defn options
-  "Checks the closed operation options before projecting selectors/fields; resources remain native."
-  [value allowed operation]
-  (v/check! (or (get contracts/schemas operation)
-                (contracts/closed (zipmap allowed (repeat :any))))
-            (if (map? value) (contracts/option-values operation value) value)
-            operation)
+(defn ^:no-doc option-fields
+  "Projects validated option fields/selectors while preserving native resources."
+  [value]
   (fields (reduce-kv (fn [out key item]
                        (assoc out
                          key (cond
-                               (and (#{:env :labels :retention} key) (map? item)) (fields
-                                                                                    item)
+                               (and (#{:env :labels :retention} key) (map? item))
+                                 (fields
+                                   item)
                                (and (= :entrypoint key) (vector? item)) (to-array item)
                                (keyword? item) (names/text item)
                                :else item)))
                      {}
-                     (contracts/option-values operation value))))
+                     value)))
 
 (defn data-map
   "Shallow keyword projection preserving native handles; accepts a shared keyword selector for encoded aliases."
@@ -67,3 +63,5 @@
                  (assoc out projected (aget value key))))
        {}
        (array-seq (Object.keys value))))))
+
+(v/instrument! key-name fields)

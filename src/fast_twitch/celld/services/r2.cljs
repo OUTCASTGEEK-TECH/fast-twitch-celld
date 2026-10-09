@@ -3,8 +3,10 @@
   read conditions and refused writes are represented separately. Multipart
   handles belong to the node/load that opened them and cannot survive a restart."
   (:require [cljs.core :refer [await]]
+            [malli.experimental :as mx]
             [fast-twitch.celld.native :as n]
             [fast-twitch.celld.validation :as v]
+            [fast-twitch.celld.contracts :as contracts]
             [fast-twitch.celld.names :as names]
             [fast-twitch.codecs.json :as json])
   (:refer-global :only [Object Headers Date TextEncoder ArrayBuffer Blob ReadableStream]))
@@ -31,198 +33,178 @@
       ["key" "version" "size" "etag" "httpEtag" "uploaded" "httpMetadata" "customMetadata"
        "checksums" "storageClass" "range" "body" "bodyUsed"])))
 
-(defn- key!
-  [key]
+(def ^:private Key
+  [:or :keyword :string])
+
+(def ^:private Body
+  [:fn
+   #(or (nil? %)
+        (string? %)
+        (instance? ArrayBuffer %)
+        (ArrayBuffer.isView %)
+        (instance? Blob %)
+        (instance? ReadableStream %))])
+
+(def ^:private DateValue
+  [:or number? [:fn #(instance? Date %)]])
+
+(def ^:private HeadersValue
+  [:fn #(instance? Headers %)])
+
+(def ^:private HttpMetadata
+  [:or HeadersValue
+   (contracts/closed {:contentType :string
+                      :contentLanguage :string
+                      :contentDisposition :string
+                      :contentEncoding :string
+                      :cacheControl :string
+                      :cacheExpiry DateValue})])
+
+(def ^:private OnlyIf
+  [:or HeadersValue
+   (contracts/closed {:etagMatches :string
+                      :etagDoesNotMatch :string
+                      :uploadedAfter DateValue
+                      :uploadedBefore DateValue})])
+
+(def ^:private ReadRange
+  [:or HeadersValue
+   (contracts/closed
+     {:offset [:int {:min 0}] :length [:int {:min 0}] :suffix [:int {:min 0}]})])
+
+(def ^:private Checksum
+  [:fn
+   #(or (and (string? %) (re-matches #"[0-9a-fA-F]+" %))
+        (instance? ArrayBuffer %)
+        (ArrayBuffer.isView %))])
+
+(def ^:private MultipartOptions
+  {:httpMetadata HttpMetadata
+   :customMetadata [:map-of :keyword :string]
+   :storageClass [:enum :Standard :InfrequentAccess]})
+
+(def ^:private WriteOptions
+  (contracts/closed (merge MultipartOptions
+                           {:onlyIf OnlyIf
+                            :md5 Checksum
+                            :sha1 Checksum
+                            :sha256 Checksum
+                            :sha384 Checksum
+                            :sha512 Checksum})))
+
+(def ^:private GetOptions
+  (contracts/closed {:range ReadRange :onlyIf OnlyIf}))
+
+(def ^:private ListOptions
+  (contracts/closed {:prefix Key
+                     :delimiter Key
+                     :startAfter Key
+                     :cursor :string
+                     :limit [:int {:min 1 :max 1000}]
+                     :include [:vector [:enum :httpMetadata :customMetadata]]}))
+
+(def ^:private Parts
+  [:vector {:min 1 :max 10000}
+   (contracts/closed {:partNumber [:int {:min 1 :max 10000}] :etag :string}
+                     #{:partNumber :etag})])
+
+(mx/defn ^:dynamic ^:private key!
+  :-
+  [:string {:min 1}]
+  [key :- Key]
   (let [key (names/text key)]
-    (v/check! [:string {:min 1}] key :r2-key)
     (when (> (.-byteLength (.encode (TextEncoder.) key)) 1024)
       (v/fail! :r2-key :bytes "Use a key of at most 1024 UTF-8 bytes."))
     key))
 
-(defn- body!
-  [value]
-  (when-not (or (nil? value)
-                (string? value)
-                (instance? ArrayBuffer value)
-                (ArrayBuffer.isView value)
-                (instance? Blob value)
-                (instance? ReadableStream value))
-    (v/fail! :r2-body :type "Use a native string, byte buffer, Blob or ReadableStream."))
-  value)
-
-(defn- nested!
-  [key value]
-  (let [date [:or number? [:fn #(instance? Date %)]]
-        schemas {:httpMetadata [:or [:fn #(instance? Headers %)]
-                                [:map {:closed true}
-                                 [:contentType {:optional true} :string]
-                                 [:contentLanguage {:optional true} :string]
-                                 [:contentDisposition {:optional true} :string]
-                                 [:contentEncoding {:optional true} :string]
-                                 [:cacheControl {:optional true} :string]
-                                 [:cacheExpiry {:optional true} date]]]
-                 :onlyIf [:or [:fn #(instance? Headers %)]
-                          [:map {:closed true} [:etagMatches {:optional true} :string]
-                           [:etagDoesNotMatch {:optional true} :string]
-                           [:uploadedAfter {:optional true} date]
-                           [:uploadedBefore {:optional true} date]]]
-                 :range [:or [:fn #(instance? Headers %)]
-                         [:map {:closed true} [:offset {:optional true} [:int {:min 0}]]
-                          [:length {:optional true} [:int {:min 0}]]
-                          [:suffix {:optional true} [:int {:min 0}]]]]}]
-    (when-let [schema (get schemas key)] (v/check! schema value :r2-options))
-    (when (= key :storageClass)
-      (v/check! [:enum "Standard" "InfrequentAccess"] value :r2-storage-class))
-    (when (= key :limit) (v/check! [:int {:min 1 :max 1000}] value :r2-list-limit))
-    (when (#{:prefix :delimiter :cursor :startAfter} key)
-      (v/check! :string value :r2-list))
-    (when (#{:md5 :sha1 :sha256 :sha384 :sha512} key)
-      (when-not (or (and (string? value) (re-matches #"[0-9a-fA-F]+" value))
-                    (instance? ArrayBuffer value)
-                    (ArrayBuffer.isView value))
-        (v/fail! :r2-checksum :type "Use hex or a native byte buffer.")))
-    value))
-
-(def write-options
-  #{:httpMetadata :customMetadata :onlyIf :md5 :sha1 :sha256 :sha384 :sha512
-    :storageClass})
-
 (defn- options-native
-  [options allowed operation]
-  ;; Nested native options retain Headers/resources; maps are explicitly projected.
-  (let [options (cond-> options
-                  (contains? options :storageClass) (update :storageClass names/text)
-                  (contains? options :include)
-                    (update :include
-                            #(mapv names/text
-                               (v/check! [:vector [:enum :httpMetadata :customMetadata]]
-                                         %
-                                         :r2-list-include)))
-                  (contains? options :prefix) (update :prefix names/text)
-                  (contains? options :delimiter) (update :delimiter names/text)
-                  (contains? options :startAfter) (update :startAfter names/text))
-        nested {:httpMetadata #{:contentType :contentLanguage :contentDisposition
-                                :contentEncoding :cacheControl :cacheExpiry}
-                :onlyIf #{:etagMatches :etagDoesNotMatch :uploadedAfter :uploadedBefore}
-                :range #{:offset :length :suffix}}]
-    (n/options (reduce-kv (fn [out key value]
-                            (nested! key value)
-                            (assoc out
-                              key (if (and (map? value) (get nested key))
-                                    (n/options value (get nested key) operation)
-                                    (if (and (= key :customMetadata) (map? value))
-                                      (n/fields (v/check! [:map-of :keyword :string]
-                                                          value
-                                                          operation))
-                                      (if (= key :include) (to-array value) value)))))
-                          {}
-                          options)
-               allowed
-               operation)))
+  [options]
+  (n/fields
+    (reduce-kv
+      (fn [out key value]
+        (assoc out
+          key
+            (cond
+              (#{:storageClass :prefix :delimiter :startAfter} key) (names/text value)
+              (= :include key) (to-array (mapv names/text value))
+              (and (#{:httpMetadata :onlyIf :range :customMetadata} key) (map? value))
+                (n/fields value)
+              :else value)))
+      {}
+      options)))
 
 (defn ^:async head!
   "Returns metadata or nil without consuming any body."
   [bucket key]
   (object-map (await (n/invoke bucket "head" [(key! key)]))))
 
-(defn ^:async get!
+(mx/defn ^{:dynamic true :async true} get!
   "Returns {:state :missing/:condition-unmet/:found :object ...}. Only :found has a body."
-  ([bucket key]
-   (get! bucket key nil))
-  ([bucket key options]
-   (let [result (await (n/invoke bucket
-                                 "get"
-                                 (cond-> [(key! key)]
-                                   options (conj (options-native options
-                                                                 #{:range :onlyIf}
-                                                                 :r2-get)))))]
-     (cond (nil? result) {:state :missing}
-           (nil? (aget result "body")) {:state :condition-unmet
-                                        :object (object-map result)}
-           :else {:state :found :object (object-map result)}))))
+  [bucket key & [options] :- [:? [:maybe GetOptions]]]
+  (let [result (await (n/invoke bucket
+                                "get"
+                                (cond-> [(key! key)]
+                                  options (conj (options-native options)))))]
+    (cond (nil? result) {:state :missing}
+          (nil? (aget result "body")) {:state :condition-unmet
+                                       :object (object-map result)}
+          :else {:state :found :object (object-map result)})))
 
-(defn ^:async put!
+(mx/defn ^{:dynamic true :async true} put!
   "Returns the stored native metadata, or nil when a native write precondition refuses it."
-  ([bucket key value]
-   (put! bucket key value nil))
-  ([bucket key value options]
-   (object-map (await (n/invoke bucket
-                                "put"
-                                (cond-> [(key! key) (body! value)]
-                                  options (conj (options-native options
-                                                                write-options
-                                                                :r2-put))))))))
+  [bucket key value :- Body & [options] :- [:? [:maybe WriteOptions]]]
+  (object-map (await (n/invoke bucket
+                               "put"
+                               (cond-> [(key! key) value]
+                                 options (conj (options-native options)))))))
 
-(defn delete!
+(mx/defn ^:dynamic delete!
   "Deletes one key or a checked vector of keys; returns the native Promise."
-  [bucket keys]
+  [bucket keys :- [:or Key [:vector {:max 1000} Key]]]
   (n/invoke bucket
             "delete"
             [(if (vector? keys)
-               (to-array (mapv key!
-                           (v/check! [:vector {:max 1000} [:or :keyword :string]]
-                                     keys
-                                     :r2-delete)))
+               (to-array (mapv key! keys))
                (key! keys))]))
 
-(defn ^:async list!
+(mx/defn ^{:dynamic true :async true} list!
   "Returns streamed-object metadata pages with :truncated? and an opaque cursor when supplied."
-  ([bucket]
-   (list! bucket nil))
-  ([bucket options]
-   (let [result (await (n/invoke bucket
-                                 "list"
-                                 (if options
-                                   [(options-native options
-                                                    #{:prefix :delimiter :cursor
-                                                      :startAfter :limit :include}
-                                                    :r2-list)]
-                                   [])))]
-     (cond-> {:objects (mapv object-map (array-seq (aget result "objects")))
-              :truncated? (aget result "truncated")
-              :delimited-prefixes (vec (array-seq (aget result "delimitedPrefixes")))}
-       (some? (aget result "cursor")) (assoc :cursor (aget result "cursor"))))))
+  [bucket & [options] :- [:? [:maybe ListOptions]]]
+  (let [result (await
+                 (n/invoke bucket "list" (if options [(options-native options)] [])))]
+    (cond-> {:objects (mapv object-map (array-seq (aget result "objects")))
+             :truncated? (aget result "truncated")
+             :delimited-prefixes (vec (array-seq (aget result "delimitedPrefixes")))}
+      (some? (aget result "cursor")) (assoc :cursor (aget result "cursor")))))
 
-(defn create-multipart!
+(mx/defn ^:dynamic create-multipart!
   "Returns a Promise of a native multipart handle. Checksums/conditions are unsupported here."
-  ([bucket key]
-   (n/invoke bucket "createMultipartUpload" [(key! key)]))
-  ([bucket key options]
-   (n/invoke bucket
-             "createMultipartUpload"
-             [(key! key)
-              (options-native options
-                              #{:httpMetadata :customMetadata :storageClass}
-                              :r2-multipart)])))
+  [bucket key & [options :as supplied] :- [:? (contracts/closed MultipartOptions)]]
+  (n/invoke bucket
+            "createMultipartUpload"
+            (cond-> [(key! key)] supplied (conj (options-native options)))))
 
-(defn resume-multipart
+(mx/defn ^:dynamic resume-multipart
   "Returns a native handle immediately; missing/lost uploads reject on first use."
-  [bucket key upload-id]
+  [bucket key upload-id :- :string]
   (n/invoke bucket
             "resumeMultipartUpload"
-            [(key! key) (v/check! :string upload-id :r2-upload-id)]))
+            [(key! key) upload-id]))
 
-(defn ^:async upload-part!
+(mx/defn ^{:dynamic true :async true} upload-part!
   "Uploads one checked part number and native body; returns native part metadata."
-  [upload number value]
+  [upload number :- [:int {:min 1 :max 10000}] value :- Body]
   (n/data-map (await (n/invoke upload
                                "uploadPart"
-                               [(v/check! [:int {:min 1 :max 10000}] number :r2-part)
-                                (body! value)]))))
+                               [number value]))))
 
-(defn ^:async complete!
+(mx/defn ^{:dynamic true :async true} complete!
   "Completes in native part order using checked {partNumber,etag} records."
-  [upload parts]
-  (v/check! [:vector {:min 1 :max 10000}
-             [:map {:closed true} [:partNumber [:int {:min 1 :max 10000}]]
-              [:etag :string]]]
-            parts
-            :r2-parts)
+  [upload parts :- Parts]
   (object-map (await (n/invoke upload
                                "complete"
                                [(to-array
-                                  (mapv #(n/options % #{:partNumber :etag} :r2-part)
-                                    parts))]))))
+                                  (mapv n/fields parts))]))))
 
 (defn abort!
   "Aborts the native upload and preserves rejection."
@@ -275,3 +257,13 @@
   {:key (n/property upload "key")
    :uploadId (n/property upload "uploadId")
    :fast-twitch.r2/upload upload})
+
+(v/instrument! key!
+               get!
+               put!
+               delete!
+               list!
+               create-multipart!
+               resume-multipart
+               upload-part!
+               complete!)

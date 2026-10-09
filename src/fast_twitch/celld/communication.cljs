@@ -1,23 +1,24 @@
 (ns fast-twitch.celld.communication
   "Celld's event-scoped outbound TCP capability adapted to shared Fast-Twitch
   operations. SSE/EventSource/streams/ports use the existing shared namespaces."
-  (:require [cljs.core :refer [await]]
+  (:require [fast-twitch.celld.contracts :as contracts]
+            [malli.experimental :as mx]
+            [cljs.core :refer [await]]
             [fast-twitch.celld.native :as n]
             [fast-twitch.celld.validation :as v]
             [fast-twitch.util.tcp :as tcp]
             [fast-twitch.client.sse.event-source :as event-source]
             [fast-twitch.client.messaging :as messaging])
-  (:refer-global :only [globalThis]))
+  (:require-global ["cloudflare:sockets" :as sockets]))
 
-(defn adapt-socket
+(mx/defn ^{:dynamic true} adapt-socket
   "Retains native socket/readable/writable handles. Half-close owns one writer
   only for its call; full close preserves the native socket's terminal Promise."
   ([socket]
    (adapt-socket socket {}))
-  ([socket options]
-   (n/options options #{:codec :streaming :signal} :tcp-adapt)
+  ([socket options :- (:tcp-adapt contracts/schemas)]
    (let [writable (n/property socket "writable")
-         half-close (^:async fn
+         half-close (^{:async true} fn
                      []
                      (let [writer (.getWriter writable)]
                        (try (await (.-ready writer))
@@ -39,58 +40,44 @@
          (if (.-aborted signal)
            (close)
            (do (.addEventListener signal "abort" cancel #js {:once true})
-               ;; The connection stays synchronous; only terminal cleanup awaits the
-               ;; native lifetime.
-               ((^:async fn
+               ((^{:async true} fn
                  []
                  (try (await (n/property socket "closed"))
                       (catch :default _ nil)
                       (finally (.removeEventListener signal "abort" cancel)))))))))
      connection)))
 
-(defn check-options!
+(mx/defn ^{:dynamic true} check-options!
   "Checks shared TCP options before opening any native socket; an already-aborted
   signal throws its native reason before connection effects."
-  [options]
-  (n/options options #{:codec :streaming :signal} :tcp-adapt)
+  [options :- (:tcp-adapt contracts/schemas)]
   (when-let [signal (:signal options)]
     (when (.-aborted signal) (throw (.-reason signal))))
   options)
 
-(defn connect!
+(def ^:private Address
+  [:or [:and :string [:fn #(boolean (re-matches #"(?:\[[^\]]+\]|[^:]+):[0-9]+" %))]]
+   [:map {:closed true} [:hostname :string] [:port [:int {:min 1 :max 65535}]]]])
+
+(mx/defn ^{:dynamic true} connect!
   "Uses Celld's documented cloudflare:sockets connector, synchronously returning
   the shared connection map. Reconnect in each later event; this is not durable I/O."
-  ([address]
+  ([address :- Address]
    (connect! address {} {}))
-  ([address native-options shared-options]
-   (if (string? address)
-     (when-not (re-matches #"(?:\[[^\]]+\]|[^:]+):[0-9]+" address)
-       (v/fail! :tcp-address :value "Use host:port or a checked hostname/port map."))
-     (v/check! [:map {:closed true} [:hostname :string]
-                [:port [:int {:min 1 :max 65535}]]]
-               address
-               :tcp-address))
+  ([address :- Address native-options :- (:tcp-connect contracts/schemas) shared-options]
    (check-options! shared-options)
-   (let [connector (aget globalThis "__ft_connect")]
-     (when-not (fn? connector)
-       (v/fail! :tcp-connect :capability "Build with the Celld native connector import."))
-     (adapt-socket (connector (if (string? address)
-                                address
-                                (n/options address #{:hostname :port} :tcp-address))
-                              (n/options native-options
-                                         #{:secureTransport :allowHalfOpen}
-                                         :tcp-connect))
-                   shared-options))))
+   (adapt-socket (sockets/connect (if (string? address) address (n/fields address))
+                                  (n/option-fields native-options))
+                 shared-options)))
 
-(defn start-tls
+(mx/defn ^{:dynamic true} start-tls
   "Consumes a native starttls socket and returns its new shared TLS connection."
   ([connection]
    (adapt-socket (n/invoke (req! connection :fast-twitch.tcp/socket) "startTls" [])))
-  ([connection options]
-   (adapt-socket (n/invoke
-                   (req! connection :fast-twitch.tcp/socket)
-                   "startTls"
-                   [(n/options options #{:expectedServerHostname} :tcp-start-tls)]))))
+  ([connection options :- (:tcp-start-tls contracts/schemas)]
+   (adapt-socket (n/invoke (req! connection :fast-twitch.tcp/socket)
+                           "startTls"
+                           [(n/option-fields options)]))))
 
 (defn native-socket
   "Returns the actual event-scoped TCP socket."
@@ -108,3 +95,5 @@
    (messaging/create-channel!))
   ([first-options second-options]
    (messaging/create-channel! first-options second-options)))
+
+(v/instrument! adapt-socket check-options! connect! start-tls)

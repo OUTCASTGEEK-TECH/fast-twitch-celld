@@ -1,11 +1,11 @@
 (ns fast-twitch.celld.worker
   "Native class relationships for named Workers and Workflows only."
   (:require [fast-twitch.celld.context :as context])
-  (:refer-global :only [Object Reflect globalThis]))
+  (:require-global ["cloudflare:workers" :as workers])
+  (:refer-global :only [Object Reflect]))
 
 (defn- constructor
   [base kind]
-  ;; Native ESM imports are injected by the checked packager; no external SDK.
   (let [ctor (fn [ctx env]
                (this-as this
                         (let [native (Reflect.construct base
@@ -21,9 +21,9 @@
 (defn named-constructor
   "Returns the actual native WorkerEntrypoint-derived CLJS constructor; no separate Cell instance is created."
   []
-  (constructor (aget globalThis "__ft_WorkerEntrypoint") :named-worker))
+  (constructor workers/WorkerEntrypoint :named-worker))
 
 (defn workflow-constructor
   "Returns the actual WorkflowEntrypoint-derived CLJS constructor with receiver-associated context."
   []
-  (constructor (aget globalThis "__ft_WorkflowEntrypoint") :workflow))
+  (constructor workers/WorkflowEntrypoint :workflow))
