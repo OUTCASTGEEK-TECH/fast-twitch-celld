@@ -1,0 +1,5 @@
+{:name "storage-checks"
+ :entry example.storage-app
+ :paths ["examples/02-rpc-sql-and-alarms/src"]
+ :output "examples/02-rpc-sql-and-alarms/.celld-build"
+ :history "examples/02-rpc-sql-and-alarms/class-history.edn"}

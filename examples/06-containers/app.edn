@@ -1,0 +1,9 @@
+{:name "native-containers"
+ :entry example.container-app
+ :paths ["examples/06-containers/src"]
+ :output "examples/06-containers/.celld-build"
+ :history "examples/06-containers/class-history.edn"
+ :config {:containers [{:class_name :ContainerCell
+                        :image "examples/06-containers/Dockerfile"
+                        :instance_type :basic
+                        :max_instances 1}]}}

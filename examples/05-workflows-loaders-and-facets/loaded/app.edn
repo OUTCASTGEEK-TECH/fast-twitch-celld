@@ -1,0 +1,5 @@
+{:name "compiled-loaded"
+ :entry example.loaded
+ :paths ["examples/05-workflows-loaders-and-facets/loaded/src"]
+ :output "examples/05-workflows-loaders-and-facets/loaded/.celld-build"
+ :history "examples/05-workflows-loaders-and-facets/loaded/class-history.edn"}

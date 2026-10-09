@@ -1,0 +1,10 @@
+{:paths ["dev" "test"]
+ :tasks
+   {format {:doc "Format maintained sources; --check verifies Fast-Twitch zprint style."
+            :task
+              (apply shell "bin/celld-clojure" "-M:quality" "format" *command-line-args*)}
+    lint-fixtures {:doc "Verify that declaration hooks keep real lint failures visible."
+                   :task (shell "bin/celld-clojure" "-M:quality" "lint-fixtures")}
+    lint {:doc "Lint maintained sources and declaration DSL with pinned dependencies."
+          :task
+            (apply shell "bin/celld-clojure" "-M:quality" "lint" *command-line-args*)}}}

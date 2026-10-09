@@ -1,0 +1,19 @@
+{:paths ["src" "resources"]
+ :deps {com.github.seancorfield/honeysql {:mvn/version "2.7.1479"}
+        metosin/malli {:mvn/version "0.20.2"}
+        org.clojure/data.json {:mvn/version "2.5.1"}
+        fast-twitch/fast-twitch {:git/url
+                                   "https://github.com/OUTCASTGEEK-TECH/fast-twitch"
+                                 :git/sha "a9f96bf90d0ded9282ac80a0f7fb808f1e5c719a"}
+        org.clojure/clojurescript {:git/url "https://github.com/clojure/clojurescript"
+                                   :git/sha "56a94ac13bfac22108e4d868dfd4763edaceb864"}}
+ :aliases
+   {:quality {:extra-paths ["dev"] :main-opts ["-m" "fast-twitch.celld.quality"]}
+    :zprint {:extra-deps {zprint/zprint {:mvn/version "1.3.0"}}
+             :main-opts ["-m" "zprint.main" "{:cwd-zprintrc? true}"]}
+    :build {:extra-paths ["dev"] :main-opts ["-m" "fast-twitch.celld.build"]}
+    :dev {:extra-paths ["dev"] :main-opts ["-m" "fast-twitch.celld.dev"]}
+    :test {:extra-paths ["dev" "test"] :main-opts ["-m" "fast-twitch.celld.test-runner"]}
+    :local {:override-deps {fast-twitch/fast-twitch {:local/root "../fast-twitch"}}}
+    :composition {:extra-deps {integrant/integrant {:mvn/version "1.0.1"}}}
+    :ui {:extra-deps {no.cjohansen/replicant {:mvn/version "2025.12.1"}}}}}

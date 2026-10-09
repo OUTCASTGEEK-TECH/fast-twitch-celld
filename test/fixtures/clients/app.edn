@@ -1,0 +1,5 @@
+{:name "client-fixture"
+ :entry fixture.client-server
+ :paths ["test/fixtures/clients/src"]
+ :output "test/fixtures/clients/.celld-build"
+ :history "test/fixtures/clients/class-history.edn"}

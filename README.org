@@ -1,0 +1,70 @@
+#+title: fast-twitch-celld
+#+startup: overview
+
+* Fast-Twitch Celld
+
+Direct ClojureScript Cells and native Celld v0.6.2 application capabilities. Fast-Twitch provides ClojureScript HTTP support for server-side JavaScript runtimes. Ordinary Cells are real synchronous constructors with native prototype methods; no DurableObject SDK, JavaScript wrapper class, second instance, domain tables, or scheduler is introduced.
+
+This checkout is an implementation under qualification. *Phase 1 is not release-ready.* The exact coverage and unresolved results are recorded in ~docs/qualification.md~ and the member catalog. Only ~:simple~ compilation is enabled.
+
+** Local build
+
+Use JDK 21 or newer; the exercised compiler is OpenJDK 27. ~bin/celld-clojure~ selects the installed Homebrew JDK, or ~CELLD_BUILD_JAVA_HOME~ when supplied. Install the locked bundler with ~npm ci~.
+
+The Fast-Twitch dependency is pinned to published commit ~a9f96bf90d0ded9282ac80a0f7fb808f1e5c719a~. Ordinary builds and checks resolve that Git dependency; a sibling checkout is optional for development.
+
+#+begin_src sh
+npm ci
+bin/celld-clojure -M:build build examples/01-direct-cell/app.edn
+.tools/celld dev examples/01-direct-cell/.celld-build/wrangler.json --no-watch
+#+end_src
+
+For development against ~../fast-twitch~, add ~:local~ to the aliases, for example ~-M:local:build~. The required Celld executable is v0.6.2; tools are intentionally untracked. Application authoring and options are described in [[file:docs/api-reference.md][the API reference]] and [[file:docs/authoring-and-migration.md][authoring and migration guide]].
+
+#+begin_src clojure
+(ns example.counter
+  (:require [cljs.core :refer [req!]])
+  (:require-macros [fast-twitch.celld.macros :refer [defcell defrpc]]))
+
+(defrpc increment {:method :increment :args [:cat :int] :returns :int}
+  [ctx amount]
+  (:count (swap! (req! ctx :state) update :count (fnil + 0) amount)))
+
+(defcell Counter {:binding :COUNTERS :include [increment]})
+#+end_src
+
+~app.edn~ selects the entry namespace and source paths. The mandatory build discovers selected declaration metadata, compiles the final ESM bundle and generated RPC clients, validates configuration/history, stages resources, and publishes one atomic ~wrangler.json~ generation pointer. Never run an unvalidated compiler output as the application artifact.
+
+#+begin_src sh
+bin/celld-clojure -M:build inspect app.edn
+bin/celld-clojure -M:build prepare-config app.edn
+# Review and explicitly adopt the .candidate class-history file.
+bin/celld-clojure -M:build build app.edn
+bin/celld-clojure -M:dev dev app.edn --port 8787
+bin/celld-clojure -M:dev clean app.edn
+#+end_src
+
+History adoption is explicit. Build never rewrites adopted migrations. Existing JSON/JSONC native configuration can be selected with ~:native-config~; it remains the single configuration authority. Generated mode supports named configuration profiles, with every supplied profile validated.
+
+Development compiles each revision in a fresh JVM, so edited macros and deleted declarations cannot survive a rebuild cache. A failed build marks status stale and retains the previous serving generation. Successful builds restart the supervised native process with local Cell state preserved. Clean removes only generated build artifacts; native ~.celld/dev~, adopted history, and dotenv inputs remain.
+
+** Checks
+
+Formatting uses the sibling Fast-Twitch style with zprint 1.3.0. Install Babashka and clj-kondo (the exercised version is v2026.08.04), then run:
+
+#+begin_src sh
+bb format --check
+bb lint
+bb lint-fixtures
+#+end_src
+
+Run ~bb format~ to apply formatting. These tasks select maintained Clojure/CLJS and EDN files, including examples and tooling; generated builds, local state and imported dependency trees are excluded. Lint analyzes pinned dependencies and uses declaration hooks that preserve native async and checked-key checks. The fixture command verifies that real binding and arity errors remain visible. With the sibling dependency override, use ~bin/celld-clojure -M:local:quality~ followed by ~format --check~, ~lint~, or ~lint-fixtures~.
+
+#+begin_src sh
+bin/celld-clojure -M:test
+bb test/public_build_failures.clj
+bb test/dev_qualification.clj
+bb test/native_qualification.clj
+#+end_src
+
+The native runner owns its fixture processes and records final generation fingerprints. Container qualification additionally requires a supported local engine; see the qualification record for the observed Podman limitations. No commands deploy, push, or provision remote resources.

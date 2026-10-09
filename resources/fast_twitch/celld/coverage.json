@@ -1,0 +1,5 @@
+{
+  "source-inventory": "resources/fast_twitch/celld/api-catalog.edn",
+  "qualified-catalog": "docs/api-catalog.edn",
+  "case-report": "docs/coverage.json"
+}

@@ -1,0 +1,13 @@
+{:name "native-services"
+ :entry example.services-app
+ :paths ["examples/04-native-services/src"]
+ :output "examples/04-native-services/.celld-build"
+ :history "examples/04-native-services/class-history.edn"
+ :config {:d1_databases [{:binding :DB
+                          :database_name :fixture-db
+                          :database_id "00000000-0000-0000-0000-000000000001"}]
+          :kv_namespaces [{:binding :KV :id "fixture-kv"}]
+          :r2_buckets [{:binding :BUCKET :bucket_name :fixture-bucket}]
+          :queues {:producers [{:binding :JOBS :queue :fixture-jobs}]
+                   :consumers
+                     [{:queue :fixture-jobs :max_batch_timeout 1 :max_batch_size 10}]}}}

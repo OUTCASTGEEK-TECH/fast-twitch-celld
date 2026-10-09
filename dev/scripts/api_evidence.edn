@@ -1,0 +1,298 @@
+{:overrides {:d1/bind "services.d1/prepare"
+             :storage/list "storage/list-entries!"
+             :storage/getAlarm "alarms/get-time!"
+             :storage/setAlarm "alarms/set-at!"
+             :storage/deleteAlarm "alarms/delete!"
+             :storage/sql "sql/native"
+             :storage/kv "storage.kv/native"
+             :sql/toArray "sql/all-rows"
+             :sql/one "sql/exactly-one"
+             :sql/Symbol.iterator "sql/cursor-native"
+             :websocket/webSocketMessage "websocket/install-handlers!"
+             :websocket/webSocketClose "websocket/install-handlers!"
+             :websocket/webSocketError "websocket/install-handlers!"
+             :r2/bodyUsed "services.r2/body-used?"
+             :r2/uploadId "services.r2/upload-map"
+             :r2/key "services.r2/object-map"
+             :workflows/run "services.workflows/run!"
+             :workflows/NonRetryableError "services.workflows/non-retryable-error"
+             :assets/fetch "services.assets/fetch!"
+             :loaders/fetch "http/client-for"
+             :facets/fetch "http/client-for"
+             :facets/RPC "rpc/call!"
+             :containers/fetch "services.containers/client-for"
+             :communication/connect "communication/connect!"
+             :communication/EventSource "communication/event-source!"
+             :communication/MessageChannel "communication/message-channel!"
+             :communication/startTls "communication/start-tls"
+             :communication/WebSocketPair "websocket/pair"
+             :r2/version "services.r2/object-map"
+             :r2/size "services.r2/object-map"
+             :r2/etag "services.r2/object-map"
+             :r2/httpEtag "services.r2/object-map"
+             :r2/uploaded "services.r2/object-map"
+             :r2/httpMetadata "services.r2/object-map"
+             :r2/customMetadata "services.r2/object-map"
+             :r2/checksums "services.r2/object-map"
+             :r2/storageClass "services.r2/object-map"
+             :r2/range "services.r2/object-map"}
+ :macro-paths {:worker/fetch "deffetch"
+               :worker/queue "defqueue-handler"
+               :worker/scheduled "defscheduled-handler"
+               :worker/WorkerEntrypoint "defworker"
+               :queues/queue "defqueue-handler"
+               :cron/scheduled "defscheduled-handler"}
+ :shared {:communication/MessagePort ["fast-twitch.client.messaging" "wrap-port"]
+          :communication/SSE ["fast-twitch.server.sse" "response"]
+          :communication/ReadableStream ["fast-twitch.util.streams.readers" "read!"]
+          :communication/WritableStream ["fast-twitch.util.tcp" "send!"]}
+ :native-options {:identity/get ["locationHint"]
+                  :identity/getByName ["locationHint"]
+                  :workflows/restart ["from"]
+                  :loaders/get ["WorkerCode callback"]
+                  :loaders/load ["WorkerCode"]
+                  :containers/exec ["env" "cwd" "user" "stdin" "stdout" "stderr"]
+                  :containers/setInactivityTimeout []}
+ :results
+   {:storage/get
+      "Single: {:found? boolean :value present-only}; batch: keyword-keyed map with missing keys omitted."
+    :storage/list
+      "list-entries! returns an ordered vector of [keyword-key decoded-value] pairs; list! returns a lookup map whose traversal order is unspecified."
+    :storage.kv/get
+      "{:found? boolean :value present-only}; stored null is distinct from absence."
+    :storage.kv/list
+      "Native synchronous iterator; list-values realizes before invalidation."
+    :sql/next "{:done? boolean :row keyword-keyed-map} or {:done? true}."
+    :sql/toArray "Bounded vector of keyword-keyed rows; drains before overflow rejection."
+    :sql/one "One keyword-keyed row; drains before cardinality rejection."
+    :sql/Symbol.iterator
+      "Native cursor, consumed by bounded/reducing helpers; drains after reduced or throwing callback."
+    :r2/get
+      "{:state :missing}, {:state :condition-unmet :object metadata}, or {:state :found :object metadata-and-live-body}."
+    :r2/head "nil or keyword-keyed metadata with original :fast-twitch.r2/object handle."
+    :r2/put "nil on refused write, otherwise metadata and original object handle."
+    :r2/list
+      "{:objects vector :truncated? boolean :delimited-prefixes vector :cursor present-only}."
+    :kv/get
+      "Native typed value; missing is nil. Bulk returns keyword-keyed persistent map."
+    :kv/getWithMetadata
+      "Keyword-keyed value/metadata record; bulk projects per-key records."
+    :workflows/status
+      "Keyword-keyed native status/output/error; output can be absent until completion."
+    :facets/abort "Synchronous native return; does not delete persisted data."
+    :containers/setInactivityTimeout "Native Promise; caller must await rejection."
+    :containers/pid "Exact native PID value, including observed 0; never synthesized."}
+ :checks
+   {:storage/get ["storage-sql-alarm-scheduled" "nil-present"]
+    :storage/put ["storage-sql-alarm-scheduled" "nil-present"]
+    :storage/transaction ["storage-sql-alarm-scheduled" "async-transaction"]
+    :storage/list ["native-storage-graph-options-and-lifetimes" "ordered-reverse-range"]
+    :storage/delete ["native-storage-graph-options-and-lifetimes" "batch-delete-count"]
+    :storage/rollback ["native-storage-graph-options-and-lifetimes" "explicit-rollback"]
+    :storage.kv/list ["native-storage-graph-options-and-lifetimes" "sync-list-null"]
+    :storage.kv/delete ["native-storage-graph-options-and-lifetimes" "sync-delete"]
+    :identity/idFromName ["direct-constructor-context-identity-and-init-failure"
+                          "identity-round-trip"]
+    :identity/idFromString ["direct-constructor-context-identity-and-init-failure"
+                            "identity-round-trip"]
+    :identity/newUniqueId ["direct-constructor-context-identity-and-init-failure"
+                           "unique-is-distinct"]
+    :identity/get ["direct-constructor-context-identity-and-init-failure"
+                   "stub-id-preserved"]
+    :identity/getByName ["direct-constructor-context-identity-and-init-failure"
+                         "concurrent-state-isolated"]
+    :identity/toString ["direct-constructor-context-identity-and-init-failure"
+                        "identity-round-trip"]
+    :identity/equals ["direct-constructor-context-identity-and-init-failure"
+                      "identity-round-trip"]
+    :identity/name ["direct-constructor-context-identity-and-init-failure" "native-name"]
+    :identity/id ["direct-constructor-context-identity-and-init-failure"
+                  "stub-id-preserved"]
+    :context/id ["direct-constructor-context-identity-and-init-failure" "context-id"]
+    :context/abort ["context-abort-reset" "call-terminated"]
+    :queues/metrics ["queue-metrics" "keyword-fields"]
+    :communication/startTls ["communication" "tcp-start-tls-native-rejection"]
+    :assets/fetch ["compiled-loader-named-worker-facets" "asset-consumed-converter-guard"]
+    :context/props ["direct-constructor-context-identity-and-init-failure"
+                    "context-props-absent"]
+    :context/exports ["direct-constructor-context-identity-and-init-failure"
+                      "context-exports-present"]
+    :context/container ["direct-constructor-context-identity-and-init-failure"
+                        "context-container-absent"]
+    :context/blockConcurrencyWhile ["direct-constructor-context-identity-and-init-failure"
+                                    "context-block-concurrency"]
+    :context/waitUntil ["direct-constructor-context-identity-and-init-failure"
+                        "context-wait-until"]
+    :storage/transactionSync ["storage-sql-alarm-scheduled" "thenable-rollback"]
+    :storage/getAlarm ["storage-sql-alarm-scheduled" "alarm-scheduled"]
+    :storage.kv/get ["storage-sql-alarm-scheduled" "sync"]
+    :storage.kv/put ["storage-sql-alarm-scheduled" "sync"]
+    :d1/run ["d1" "d1-run"]
+    :d1/all ["d1" "d1-all"]
+    :d1/first ["d1" "d1-first"]
+    :d1/raw ["d1" "d1-raw"]
+    :d1/withSession ["d1" "d1-session"]
+    :d1/getBookmark ["d1" "d1-session"]
+    :kv/get ["kv" "kv-text"]
+    :kv/getWithMetadata ["kv" "kv-metadata"]
+    :kv/put ["kv" "kv-text"]
+    :kv/delete ["kv" "kv-delete"]
+    :kv/list ["kv" "kv-list"]
+    :r2/head ["r2" "r2-head"]
+    :r2/get ["r2" "r2-stream-range"]
+    :r2/delete ["r2" "r2-delete"]
+    :r2/list ["r2" "r2-list"]
+    :r2/createMultipartUpload ["r2" "r2-multipart"]
+    :r2/uploadPart ["r2" "r2-multipart"]
+    :r2/complete ["r2" "r2-multipart"]
+    :queues/send ["queue-send" "sent"]
+    :queues/sendBatch ["queue-send" "sent"]
+    :cron/scheduled ["native-utc-cron" "fired"]
+    :standard/HTMLRewriter ["ordinary-native-interop" "htmlrewriter"]
+    :standard/crypto ["ordinary-native-interop" "webcrypto"]
+    :standard/WebAssembly ["ordinary-native-interop" "wasm"]
+    :standard/Headers ["ordinary-native-interop" "headers"]
+    :standard/URL ["ordinary-native-interop" "standard-url"]
+    :standard/URLSearchParams ["ordinary-native-interop" "url-search-params"]
+    :standard/TextEncoder ["ordinary-native-interop" "text-codec"]
+    :standard/TextDecoder ["ordinary-native-interop" "text-codec"]
+    :standard/setTimeout ["ordinary-native-interop" "timers"]
+    :standard/clearTimeout ["ordinary-native-interop" "timers"]
+    :standard/caches ["ordinary-native-interop" "cache-always-miss"]
+    :standard/node:path ["ordinary-native-interop" "node-path"]
+    :storage/deleteAll ["owned-storage-members-and-sql-results" "storage-delete-all"]
+    :storage/sync ["owned-storage-members-and-sql-results" "storage-sync"]
+    :storage/deleteAlarm ["owned-storage-members-and-sql-results" "alarm-delete"]
+    :storage/sql ["owned-storage-members-and-sql-results" "storage-sql-view"]
+    :storage/kv ["owned-storage-members-and-sql-results" "storage-kv-view"]
+    :sql/exec ["owned-storage-members-and-sql-results" "sql-collected"]
+    :sql/raw ["owned-storage-members-and-sql-results" "sql-raw"]
+    :sql/columnNames ["owned-storage-members-and-sql-results" "sql-column-names"]
+    :sql/rowsRead ["owned-storage-members-and-sql-results" "sql-row-counters"]
+    :sql/rowsWritten ["owned-storage-members-and-sql-results" "sql-row-counters"]
+    :sql/toArray ["owned-storage-members-and-sql-results" "sql-collected"]
+    :sql/one ["owned-storage-members-and-sql-results" "sql-one-empty-reject"]
+    :sql/databaseSize ["bounded-cursors-write-drain-and-primary-error" "database-size"]
+    :sql/next ["bounded-cursors-write-drain-and-primary-error" "native-cursor-drained"]
+    :sql/Symbol.iterator ["owned-storage-members-and-sql-results" "sql-native-iterator"]
+    :d1/batch ["d1" "d1-ordered-batch"]
+    :d1/exec ["d1" "d1-exec-metadata"]
+    :d1/prepare ["d1" "d1-first"]
+    :d1/bind ["d1" "d1-boolean"]
+    :r2/put ["r2" "r2-refused-write"]
+    :r2/arrayBuffer ["r2" "r2-array-buffer"]
+    :r2/bytes ["r2" "r2-bytes"]
+    :r2/text ["r2" "r2-stream-range"]
+    :r2/json ["r2" "r2-json"]
+    :r2/blob ["r2" "r2-blob"]
+    :r2/bodyUsed ["r2" "r2-body-used"]
+    :r2/body ["r2" "r2-body-handle"]
+    :r2/resumeMultipartUpload ["r2" "r2-resume"]
+    :r2/abort ["r2" "r2-abort-terminal"]
+    :r2/writeHttpMetadata ["r2" "r2-write-http-metadata"]
+    :r2/uploadId ["r2" "r2-upload-metadata"]
+    :r2/range ["r2" "r2-range-metadata"]
+    :queues/ack ["queue-consumed" "one"]
+    :queues/retry ["queue-consumed" "retry-single"]
+    :queues/retryAll ["queue-consumed" "retry-batch"]
+    :queues/id ["queue-consumed" "metadata"]
+    :queues/timestamp ["queue-consumed" "metadata"]
+    :queues/body ["queue-consumed" "metadata"]
+    :queues/attempts ["queue-consumed" "metadata"]
+    :queues/messages ["queue-consumed" "metadata"]
+    :queues/queue ["queue-consumed" "metadata"]
+    :loaders/get ["compiled-loader-named-worker-facets" "memoized-code"]
+    :loaders/load ["compiled-loader-named-worker-facets" "anonymous"]
+    :loaders/getEntrypoint ["compiled-loader-named-worker-facets" "named-rpc"]
+    :loaders/getDurableObjectClass ["compiled-loader-named-worker-facets" "facet-storage"]
+    :loaders/dispose ["compiled-loader-named-worker-facets" "disposed"]
+    :loaders/fetch ["compiled-loader-named-worker-facets" "loaded-caller-abort"]
+    :facets/get ["compiled-loader-named-worker-facets" "facet-storage"]
+    :facets/abort ["compiled-loader-named-worker-facets" "facet-abort-retains"]
+    :facets/delete ["compiled-loader-named-worker-facets" "facet-delete-resets"]
+    :facets/fetch ["compiled-loader-named-worker-facets" "facet-fetch"]
+    :facets/RPC ["compiled-loader-named-worker-facets" "facet-storage"]
+    :workflows/create ["workflow-instance-controls-durable-steps" "output-codec"]
+    :workflows/createBatch ["workflow-instance-controls-durable-steps" "batch"]
+    :workflows/get ["workflow-instance-controls-durable-steps" "looked-up"]
+    :workflows/deleteBatch ["workflow-instance-controls-durable-steps" "batch-deleted"]
+    :workflows/status ["workflow-instance-controls-durable-steps" "waiting-no-output"]
+    :workflows/sendEvent ["workflow-instance-controls-durable-steps" "output-codec"]
+    :workflows/pause ["workflow-instance-controls-durable-steps" "paused"]
+    :workflows/resume ["workflow-instance-controls-durable-steps" "output-codec"]
+    :workflows/restart ["workflow-instance-controls-durable-steps" "restart-from"]
+    :workflows/terminate ["workflow-instance-controls-durable-steps" "terminated"]
+    :workflows/delete ["workflow-instance-controls-durable-steps" "deleted"]
+    :workflows/do ["workflow-instance-controls-durable-steps" "output-codec"]
+    :workflows/sleep ["workflow-instance-controls-durable-steps" "output-codec"]
+    :workflows/sleepUntil ["workflow-instance-controls-durable-steps" "output-codec"]
+    :workflows/waitForEvent ["workflow-instance-controls-durable-steps" "output-codec"]
+    :workflows/run ["workflow-instance-controls-durable-steps" "output-codec"]
+    :workflows/id ["workflow-instance-controls-durable-steps" "instance-id"]
+    :workflows/NonRetryableError ["workflow-instance-controls-durable-steps"
+                                  "non-retryable"]
+    :context/storage ["owned-storage-members-and-sql-results" "storage-native"]
+    :context/facets ["compiled-loader-named-worker-facets" "facet-storage"]
+    :worker/WorkerEntrypoint ["compiled-loader-named-worker-facets" "named-rpc"]
+    :worker/queue ["queue-consumed" "metadata"]
+    :worker/scheduled ["native-utc-cron" "fired"]
+    :websocket/acceptWebSocket ["hibernation-binary-tags-auto-response" "accepted-socket"]
+    :websocket/getWebSockets ["hibernation-binary-tags-auto-response" "accepted-socket"]
+    :websocket/getTags ["hibernation-binary-tags-auto-response" "tags"]
+    :websocket/setWebSocketAutoResponse ["hibernation-binary-tags-auto-response"
+                                         "auto-response"]
+    :websocket/getWebSocketAutoResponse ["hibernation-binary-tags-auto-response"
+                                         "auto-response"]
+    :websocket/getWebSocketAutoResponseTimestamp ["hibernation-binary-tags-auto-response"
+                                                  "auto-timestamp"]
+    :websocket/webSocketMessage ["hibernation-binary-tags-auto-response"
+                                 "message-after-eviction"]
+    :websocket/webSocketClose ["hibernation-binary-tags-auto-response"
+                               "close-after-eviction"]
+    :websocket/webSocketError ["hibernated-native-error" "typed-error"]
+    :communication/connect ["communication" "tcp-half-close"]
+    :communication/readable ["communication" "tcp-half-close"]
+    :communication/writable ["communication" "tcp-half-close"]
+    :communication/close ["communication" "tcp-closed-resolved"]
+    :communication/EventSource ["communication" "event-source"]
+    :communication/MessageChannel ["communication" "port-data"]
+    :communication/MessagePort ["communication" "port-data"]
+    :communication/ReadableStream ["communication" "bounded-stream"]
+    :communication/WritableStream ["communication" "tcp-half-close"]
+    :communication/WebSocketPair ["hibernation-binary-tags-auto-response"
+                                  "accepted-socket"]
+    :websocket/serializeAttachment ["hibernation-binary-tags-auto-response"
+                                    "attachment-round-trip"]
+    :websocket/deserializeAttachment ["hibernation-binary-tags-auto-response"
+                                      "attachment-round-trip"]
+    :communication/opened ["communication" "tcp-opened-resolved"]
+    :communication/closed ["communication" "tcp-closed-resolved"]
+    :r2/key ["r2" "r2-metadata-fields"]
+    :r2/version ["r2" "r2-metadata-fields"]
+    :r2/size ["r2" "r2-head"]
+    :r2/etag ["r2" "r2-metadata-fields"]
+    :r2/httpEtag ["r2" "r2-metadata-fields"]
+    :r2/uploaded ["r2" "r2-metadata-fields"]
+    :r2/httpMetadata ["r2" "r2-metadata-fields"]
+    :r2/customMetadata ["r2" "r2-metadata-fields"]
+    :r2/checksums ["r2" "r2-metadata-fields"]
+    :r2/storageClass ["r2" "r2-metadata-fields"]
+    :storage/setAlarm ["native-alarm-fired" nil]
+    :worker/fetch ["direct-cell-init-fetch" nil]}
+ :invocation-checks
+   {:communication/SSE ["sse-serving"
+                        "test/native-transport.mjs: sse-serving asserts data:served"]
+    :queues/ackAll
+      ["queue-consumed"
+       "examples/04-native-services/src/example/services_app.cljs: consume calls ack-all!"]
+    :cron/noRetry
+      ["native-utc-cron"
+       "examples/04-native-services/src/example/services_app.cljs: scheduled calls no-retry!"]
+    :cron/cron
+      ["native-utc-cron"
+       "examples/04-native-services/src/example/services_app.cljs: scheduled reads controller-map"]
+    :cron/scheduledTime
+      ["native-utc-cron"
+       "examples/04-native-services/src/example/services_app.cljs: scheduled reads controller-map"]}
+ :scalar-checks {:storage/setAlarm ["native-alarm-fired" "true"]
+                 :worker/fetch ["direct-cell-init-fetch" "ready=true"]}}

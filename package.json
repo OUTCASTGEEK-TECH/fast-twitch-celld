@@ -1,0 +1,9 @@
+{
+  "name": "fast-twitch-celld",
+  "private": true,
+  "version": "0.1.0-phase-one",
+  "type": "module",
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}

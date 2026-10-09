@@ -1,0 +1,6 @@
+{:name "corrections"
+ :entry fixture.corrections
+ :paths ["test/fixtures/corrections/src"]
+ :output "test/fixtures/corrections/.celld-build"
+ :history "test/fixtures/corrections/class-history.edn"
+ :config {:d1_databases [{:binding :verification/DB :database_name :corrections}]}}

@@ -1,0 +1,5 @@
+{:name "native-interop"
+ :entry example.interop-app
+ :paths ["examples/07-native-interop/src"]
+ :output "examples/07-native-interop/.celld-build"
+ :history "examples/07-native-interop/class-history.edn"}

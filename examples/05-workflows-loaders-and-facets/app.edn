@@ -1,0 +1,9 @@
+{:name "workflows-loaders-facets"
+ :entry example.orchestration-app
+ :paths ["examples/05-workflows-loaders-and-facets/src"]
+ :output "examples/05-workflows-loaders-and-facets/.celld-build"
+ :history "examples/05-workflows-loaders-and-facets/class-history.edn"
+ :config {:worker_loaders [{:binding :LOADER}]
+          :assets {:binding :ASSETS
+                   :directory "target/example05-assets"
+                   :run_worker_first true}}}

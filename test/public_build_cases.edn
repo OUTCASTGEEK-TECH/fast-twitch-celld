@@ -1,0 +1,207 @@
+[{:fixture "unknown-cell-key"
+  :source "(defcell Good {:binding :GOOD :typo 1})"
+  :extra ""
+  :code "unknown-key"}
+ {:fixture "dynamic-export"
+  :source "(defcell Good {:binding :GOOD :export (str \"Bad\")})"
+  :extra ""
+  :code "native-name"}
+ {:fixture "missing-include"
+  :source "(defcell Good {:binding :GOOD :include [missing]})"
+  :extra ""
+  :code "unresolved"}
+ {:fixture "invalid-include-kind"
+  :source
+    "(defqueue-handler queue [ctx batch] nil) (defcell Good {:binding :GOOD :include [queue]})"
+  :extra ""
+  :code "scope"}
+ {:fixture "wrong-focused-arity"
+  :source "(deffetch bad [request] nil) (defcell Good {:binding :GOOD})\n"
+  :extra ""
+  :code "arity"}
+ {:fixture "wrong-rpc-arity"
+  :source
+    "(defrpc bad {:method :bad :args [:cat :int]} [ctx] nil) (defcell Good {:binding :GOOD})\n"
+  :extra ""
+  :code "arity"}
+ {:fixture "rpc-native-event"
+  :source "(defrpc bad {:method :fetch} [ctx] nil) (defcell Good {:binding :GOOD})\n"
+  :extra ""
+  :code "reserved-member"}
+ {:fixture "ordinary-rpc-event"
+  :source
+    "(deffetch f [ctx req] nil) (defcell Good {:binding :GOOD :fetch f :rpc {:fetch {:handler f}}})"
+  :extra ""
+  :code "duplicate-event"}
+ {:fixture "ordinary-rpc-unknown"
+  :source
+    "(defn f [ctx] nil) (defcell Good {:binding :GOOD :rpc {:f {:handler f :typo 1}}})"
+  :extra ""
+  :code "unknown-key"}
+ {:fixture "ordinary-rpc-codec"
+  :source
+    "(defn f [ctx] nil) (defcell Good {:binding :GOOD :rpc {:f {:handler f :codec :unknown}}})"
+  :extra ""
+  :code "codec"}
+ {:fixture "ordinary-rpc-arity"
+  :source
+    "(defn f [ctx] nil) (defcell Good {:binding :GOOD :rpc {:f {:handler f :args [:cat :int]}}})"
+  :extra ""
+  :code "arity"}
+ {:fixture "invalid-schema"
+  :source
+    "(defrpc bad {:method :bad :args [:not-a-schema]} [ctx] nil) (defcell Good {:binding :GOOD})\n"
+  :extra ""
+  :code "schema"}
+ {:fixture "include-collision"
+  :source
+    "(deffetch one [ctx req] nil) (deffetch two [ctx req] nil) (defcell Good {:binding :GOOD :include [one two]})"
+  :extra ""
+  :code "duplicate-event"}
+ {:fixture "map-include-collision"
+  :source
+    "(deffetch one [ctx req] nil) (defcell Good {:binding :GOOD :include [one] :fetch one})"
+  :extra ""
+  :code "duplicate-event"}
+ {:fixture "multiple-initializers"
+  :source
+    "(defcell-init one [ctx] nil) (defcell-init two [ctx] nil) (defcell Good {:binding :GOOD :include [one two]})"
+  :extra ""
+  :code "duplicate-event"}
+ {:fixture "duplicate-export"
+  :source
+    "(defcell Good {:binding :GOOD})\n(defcell Other {:export :Good :binding :OTHER})"
+  :extra ""
+  :code "duplicate-identity"}
+ {:fixture "duplicate-binding"
+  :source "(defcell Good {:binding :GOOD})\n(defcell Other {:binding :GOOD})"
+  :extra ""
+  :code "duplicate-identity"}
+ {:fixture "wrong-workflow-shape"
+  :source
+    "(defworkflow Wrong {:binding :FLOW} [event step] nil) (defcell Good {:binding :GOOD})\n"
+  :extra ""
+  :code "arity"}
+ {:fixture "invalid-hibernation"
+  :source
+    "(defcell Good {:binding :GOOD :websocket {:id :fixture/test :version 0 :mode :hibernating}})"
+  :extra ""
+  :code "option-value"}
+ {:fixture "obvious-sync-await"
+  :source
+    "(defn bad [s] (with-transaction-sync s (cljs.core/await nil))) (defcell Good {:binding :GOOD})\n"
+  :extra ""
+  :code "async-sync"}
+ {:fixture "unknown-config"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra ":config {:routes []}"
+  :code "unknown-key"}
+ {:fixture "nested-config-typo"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra ":config {:assets {:directory \"public\" :typo true}}"
+  :code "unknown-key"}
+ {:fixture "ineffective-flag"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra ":config {:compatibility_flags [:nodejs_compat]}"
+  :code "unsupported-flag"}
+ {:fixture "unsupported-advanced"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra ":optimizations :advanced"
+  :code "optimization"}
+ {:fixture "history-unadopted"
+  :source "(defcell New {:binding :NEW})"
+  :extra ""
+  :code "unadopted-class"}
+ {:fixture "history-removed"
+  :source "(defcell Other {:binding :OTHER})"
+  :extra ""
+  :code "unadopted-class"}
+ {:fixture "invalid-profile"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra ":profile :missing"
+  :code "profile"}
+ {:fixture "nested-queue-unknown"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra ":config {:queues {:producers [{:binding :JOBS :queue :jobs :typo 1}]}}"
+  :code "unknown-key"}
+ {:fixture "queue-delay-bound"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra
+    ":config {:queues {:producers [{:binding :JOBS :queue :jobs :delivery_delay 86401}]}}"
+  :code "option-value"}
+ {:fixture "resource-binding-collision"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra ":config {:kv_namespaces [{:binding :GOOD :id \"fixture\"}]}"
+  :code "configuration"}
+ {:fixture "inactive-profile-invalid"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra ":profiles {:release {} :development {:routes []}}"
+  :code "unknown-key"}
+ {:fixture "workflow-invalid-codec"
+  :source
+    "(defworkflow Flow {:binding :FLOW :codec :rpc} [ctx event step] nil) (defcell Good {:binding :GOOD})\n"
+  :extra ""
+  :code "codec"}
+ {:fixture "rpc-invalid-codec"
+  :source
+    "(defrpc bad {:method :bad :codec :unknown} [ctx] nil) (defcell Good {:binding :GOOD})\n"
+  :extra ""
+  :code "codec"}
+ {:fixture "invalid-schema-reference"
+  :source
+    "(defrpc bad {:method :bad :args missing-schema} [ctx] nil) (defcell Good {:binding :GOOD})\n"
+  :extra ""
+  :code "unresolved"}
+ {:fixture "unsupported-runtime-import"
+  :source
+    "(ns fixture.invalid (:require-global [\"node:net\" :as net]) (:require-macros [fast-twitch.celld.macros :refer [defcell]])) (defcell Good {:binding :GOOD})"
+  :extra ""
+  :code "runtime-import"}
+ {:fixture "compiler-arity"
+  :source "(defn f [x] x) (defn bad [] (f 1 2)) (defcell Good {:binding :GOOD})\n"
+  :extra ""
+  :code "compiler-boundary"}
+ {:fixture "invalid-cron-range"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra ":config {:triggers {:crons [\"0 0 * * 0\"]}}"
+  :code "configuration"}
+ {:fixture "container-invalid-class"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra ":config {:containers [{:class_name :Missing :image \"fixture:latest\"}]}"
+  :code "configuration"}
+ {:fixture "secret-redaction"
+  :source
+    "(defcell Good {:binding nil :extensions {:fixture/secret \"SECRET_SENTINEL_66af\"}})"
+  :extra ""
+  :code "binding"}
+ {:fixture "websocket-foreign-adapter-required"
+  :source
+    "(def foreign js/console.log) (defwebsocket-handlers sockets {:id :fixture/socket :version 1 :mode :resident :message foreign}) (defcell Good {:binding :GOOD})\n"
+  :extra ""
+  :code "arity"}
+ {:fixture "fetch-native-boolean"
+  :source
+    "(deffetch f {:native? \"false\"} [ctx request] nil) (defcell Good {:binding :GOOD})\n"
+  :extra ""
+  :code "option-value"}
+ {:fixture "ordinary-fetch-native-boolean"
+  :source
+    "(defn f [ctx request] nil) (defcell Good {:binding :GOOD :fetch {:handler f :native? \"false\"}})"
+  :extra ""
+  :code "option-value"}
+ {:fixture "facet-boolean"
+  :source "(defcell Good {:binding :GOOD :facet? \"false\"})"
+  :extra ""
+  :code "option-value"}
+ {:fixture "config-no-bundle-boolean"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra ":config {:no_bundle \"false\"}"
+  :code "option-value"}
+ {:fixture "config-assets-boolean"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra ":config {:assets {:directory \"public\" :run_worker_first \"false\"}}"
+  :code "option-value"}
+ {:fixture "config-rules-enum"
+  :source "(defcell Good {:binding :GOOD})\n"
+  :extra ":config {:rules [{:type :Unknown :globs [\"*.txt\"]}]}"
+  :code "option-value"}]

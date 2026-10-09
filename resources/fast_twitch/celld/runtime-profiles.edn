@@ -1,0 +1,15 @@
+{:target
+   {:runtime :celld :version "0.6.2" :source "90b43017241f81189453d326d05948f388b34652"}
+ :compiler {:sha "56a94ac13bfac22108e4d868dfd4763edaceb864" :optimizations #{:simple}}
+ :jdk {:minimum 21 :qualified "OpenJDK 27"}
+ :bundler {:name :esbuild :version "0.25.12"}
+ :fast-twitch {:sha "a9f96bf90d0ded9282ac80a0f7fb808f1e5c719a"}
+ :malli "0.20.2"
+ :honeysql "2.7.1479"
+ :compatibility-date "2026-10-07"
+ :flags #{"js_rpc" "delete_all_deletes_alarm" "fetcher_no_get_put_delete" "sqlite_vec"
+          "websocket_standard_binary_type" "assets_navigation_has_no_effect"
+          "assets_navigation_prefers_asset_serving"}
+ :limits {:payload-bytes 1048576 :tcp-lifetime :event :http-inactive-stream-ms 60000}
+ :qualification :in-progress
+ :release-ready? false}
